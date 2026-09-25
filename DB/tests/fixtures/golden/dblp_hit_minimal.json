@@ -1,0 +1,28 @@
+{
+  "@id": "1",
+  "@score": "100",
+  "info": {
+    "authors": {
+      "author": [
+        {
+          "@pid": "00/0001",
+          "text": "Josiah Carberry"
+        },
+        {
+          "@pid": "00/0002",
+          "text": "Ada Example"
+        }
+      ]
+    },
+    "title": "Synthetic Collective Behaviour Paper.",
+    "venue": "Journal of Synthetic Metadata",
+    "pages": "1-12",
+    "year": "2024",
+    "type": "Journal Articles",
+    "access": "open",
+    "key": "journals/jsynth/CarberryE24",
+    "doi": "10.5555/DBLP-DEMO-0001",
+    "ee": "https://doi.org/10.5555/DBLP-DEMO-0001",
+    "url": "https://dblp.org/rec/journals/jsynth/CarberryE24"
+  }
+}

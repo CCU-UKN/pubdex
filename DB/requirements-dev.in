@@ -1,0 +1,4 @@
+# DB-local development and test dependencies.
+httpx[http2]==0.28.1
+psycopg[binary]==3.2.12
+pytest==9.0.3

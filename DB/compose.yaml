@@ -1,0 +1,86 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: peopledb-postgres
+    # This is an unattended database service. `always` also recovers a
+    # container that an operator stopped manually before the Docker engine
+    # or Windows host restarted.
+    restart: always
+    environment:
+      POSTGRES_DB: people_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # Encourage scram; we also set it in init SQL.
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_buffers=1GB"
+      - "-c"
+      - "work_mem=32MB"
+      - "-c"
+      - "max_connections=200"
+      - "-c"
+      - "password_encryption=scram-sha-256"
+    shm_size: "1g"
+    volumes:
+      - peopledb_data:/var/lib/postgresql/data
+      - ./init:/docker-entrypoint-initdb.d:ro
+      - ./backups:/backups
+    # Stable local binding (works regardless of VPN state).
+    # If you need VPN/LAN access, add an additional host-IP mapping
+    # only while that interface is present.
+    ports:
+      - "127.0.0.1:5432:5432"
+      # :? guard: an empty/unset WG_BIND_IP would otherwise publish on 0.0.0.0
+      - "${WG_BIND_IP:?WG_BIND_IP must be set in DB/.env (see the repo-root .env.example)}:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d people_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Optional, add later if/when we need pooling
+  # pgbouncer:
+  #   image: edoburu/pgbouncer:1.23.1
+  #   container_name: peopledb-pgbouncer
+  #   restart: unless-stopped
+  #   environment:
+  #     DB_USER: postgres
+  #     DB_PASSWORD: ${POSTGRES_PASSWORD}
+  #     DB_HOST: postgres
+  #     DB_PORT: 5432
+  #     POOL_MODE: transaction
+  #     MAX_CLIENT_CONN: 500
+  #     DEFAULT_POOL_SIZE: 50
+  #   depends_on:
+  #     - postgres
+  #   ports:
+  #     - "${WG_BIND_IP}:6432:6432"
+
+  pgadmin:
+    image: dpage/pgadmin4:9.12
+    container_name: peopledb-pgadmin
+    restart: always
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
+      # Import this server definition for the default pgAdmin user.
+      PGADMIN_SERVER_JSON_FILE: /pgadmin4/servers.json
+    volumes:
+      # Keep pgAdmin runtime state in a named volume, out of the worktree.
+      - pgadmin_data:/var/lib/pgadmin
+      - ./pgadmin-servers.json:/pgadmin4/servers.json:ro
+    ports:
+      - "127.0.0.1:${PGADMIN_LOCAL_PORT:-8081}:80"     # local browser UI
+      - "${WG_BIND_IP:?WG_BIND_IP must be set in DB/.env (see the repo-root .env.example)}:8080:80"
+    depends_on:
+      - postgres
+
+networks:
+  default:
+    name: peopledb-net
+
+volumes:
+  peopledb_data:
+  pgadmin_data:
+    name: peopledb-pgadmin-data

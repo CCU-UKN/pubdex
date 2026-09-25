@@ -1,0 +1,52 @@
+{
+  "id": "10.5555/datacite-demo-0001",
+  "type": "dois",
+  "attributes": {
+    "doi": "10.5555/datacite-demo-0001",
+    "titles": [
+      {
+        "title": "Synthetic Collective Behaviour Dataset"
+      }
+    ],
+    "creators": [
+      {
+        "name": "Carberry, Josiah",
+        "givenName": "Josiah",
+        "familyName": "Carberry",
+        "nameType": "Personal",
+        "nameIdentifiers": [
+          {
+            "nameIdentifier": "https://orcid.org/0000-0002-1825-0097",
+            "nameIdentifierScheme": "ORCID",
+            "schemeUri": "https://orcid.org"
+          }
+        ],
+        "affiliation": [
+          {
+            "name": "Example University",
+            "department": "Department of Synthetic Studies"
+          }
+        ]
+      },
+      {
+        "givenName": "Ada",
+        "familyName": "Example",
+        "nameType": "Personal",
+        "nameIdentifiers": [],
+        "affiliation": [
+          "Example University"
+        ]
+      }
+    ],
+    "publisher": "Example Data Repository",
+    "container": {
+      "type": "Journal",
+      "title": "Journal of Synthetic Data Reports"
+    },
+    "publicationYear": 2024,
+    "types": {
+      "resourceTypeGeneral": "Dataset",
+      "resourceType": "Dataset"
+    }
+  }
+}

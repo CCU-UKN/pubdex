@@ -1,0 +1,38 @@
+# OS / editor
+.DS_Store
+Thumbs.db
+
+# Python
+**/__pycache__/
+**/.venv/
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+
+# Environment files and credentials
+.env
+.env.*
+*.env
+*.env.*
+!.env.example
+!**/.env.example
+!*.env.example
+*.pem
+*.key
+
+# Data-safety guard: rosters and database exports stay out of git.
+# Synthetic test fixtures are the only tracked CSV files.
+*.csv
+*.xlsx
+*.xls
+*.dump
+*.sql.gz
+*.bib
+*.eml
+!DB/tests/fixtures/golden/*.csv
+
+# Database runtime state, backups, logs, machine-local cron file
+DB/data/
+DB/backups/
+DB/cron
+DB/*.log

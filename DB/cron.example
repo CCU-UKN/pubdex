@@ -1,0 +1,20 @@
+# Copy this file to DB/cron, replace REPO_ROOT with the local absolute path,
+# then install it with: crontab DB/cron
+SHELL=/bin/bash
+REPO_ROOT=/absolute/path/to/pubdex
+
+# Monthly: rotate all DB/*.log files into backups/logs/.
+30 09 1 * * cd "$REPO_ROOT/DB" && ./rotate_logs.sh >> rotate_logs.log 2>&1
+
+# The two bundle scripts hold the job lists (one runner invocation per job);
+# edit them, not this file, to change what runs.
+
+# Daily: backup first, then the per-person refreshes.
+00 10 * * * cd "$REPO_ROOT/DB" && ./RunAllDayly.sh >> RunAllDayly.log 2>> RunAllDayly.err.log
+
+# Weekly Wednesday: metadata backfills.
+15 12 * * 3 cd "$REPO_ROOT/DB" && ./RunAllWeekly.sh >> RunAllWeekly.log 2>> RunAllWeekly.err.log
+
+# Canon serving snapshot: refresh every six hours and check freshness hourly.
+17 */6 * * * cd "$REPO_ROOT/DB" && ./refresh_publications_canon_web.sh >> refresh_publications_canon_web.log 2>&1
+47 * * * * cd "$REPO_ROOT/DB" && ./check_canon_web_freshness.sh >> check_canon_web_freshness.log 2>&1

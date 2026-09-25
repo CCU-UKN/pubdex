@@ -1,0 +1,13 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "PeopleDB",
+      "Group": "Servers",
+      "Host": "postgres",
+      "Port": 5432,
+      "MaintenanceDB": "people_db",
+      "Username": "app_readonly",
+      "SSLMode": "prefer"
+    }
+  }
+}

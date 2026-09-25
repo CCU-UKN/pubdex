@@ -1,0 +1,5 @@
+pub_id,doi,title,year,n_source_families,source_families,source_tokens
+1,10.5555/cov-0001,Alpha Paper,2024,2,crossref+orcid,crossref+orcid
+2,10.5555/cov-0002,Beta Preprint,2023,2,crossref+openalex,crossref+crossref-funding+openalex
+3,,Gamma Note,,1,datacite,datacite-affiliation
+4,,Delta Fragment,,0,,

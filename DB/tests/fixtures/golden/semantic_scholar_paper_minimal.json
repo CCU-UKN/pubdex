@@ -1,0 +1,38 @@
+{
+  "paperId": "0000000000000000000000000000000000000001",
+  "externalIds": {
+    "DOI": "10.5555/SEMANTIC-DEMO-0001",
+    "CorpusId": 900001
+  },
+  "title": "Synthetic Collective Behaviour Paper",
+  "venue": "J. Synthetic Metadata",
+  "publicationVenue": {
+    "id": "00000000-0000-0000-0000-000000000001",
+    "name": "Journal of Synthetic Metadata",
+    "type": "journal"
+  },
+  "year": 2024,
+  "publicationDate": "2024-05-06",
+  "publicationTypes": [
+    "JournalArticle"
+  ],
+  "isOpenAccess": true,
+  "authors": [
+    {
+      "authorId": "100001",
+      "name": "Josiah Carberry",
+      "affiliations": [
+        "Example University"
+      ],
+      "externalIds": {
+        "ORCID": "0000-0002-1825-0097"
+      }
+    },
+    {
+      "authorId": "100002",
+      "name": "Ada Example",
+      "affiliations": [],
+      "externalIds": {}
+    }
+  ]
+}

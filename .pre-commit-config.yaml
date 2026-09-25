@@ -1,0 +1,12 @@
+repos:
+  - repo: local
+    hooks:
+      # One hook, one script: the same default offline suite runs locally, in
+      # this hook and in CI. Add a check to run_checks.sh, not here. The
+      # Docker-backed commands (migration smoke, acceptance demonstration,
+      # integration suite) stay out of the commit path on purpose.
+      - id: offline-checks
+        name: Default offline check suite (compile, markdown links, offline tests, transform guard)
+        entry: ./run_checks.sh --staged
+        language: system
+        pass_filenames: false

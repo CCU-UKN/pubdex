@@ -1,0 +1,162 @@
+{
+  "state_table": "activity.source_refresh_state",
+  "env": {
+    "PGHOST": "127.0.0.1",
+    "PGPORT": "5432",
+    "PGDATABASE": "people_db",
+    "PGUSER": "app_writer"
+  },
+  "jobs": [
+    {
+      "name": "orcid_profiles_person",
+      "enabled": true,
+      "source": "orcid_profile",
+      "scope_type": "person",
+      "person_selector_sql": "SELECT io.person_id FROM app.identities_orcid io WHERE io.orcid IS NOT NULL AND io.orcid <> ''",
+      "stale_after_months": 3,
+      "limit": 30,
+      "module": "people_pubs.sync.orcid_profiles",
+      "base_args": [],
+      "per_person_args": [
+        "--only-person-id",
+        "{person_id}"
+      ],
+      "dry_run_arg": "--dry-run"
+    },
+    {
+      "name": "orcid_works_person",
+      "enabled": true,
+      "source": "orcid_works",
+      "scope_type": "person",
+      "person_selector_sql": "SELECT io.person_id FROM app.identities_orcid io WHERE io.orcid IS NOT NULL AND io.orcid <> ''",
+      "stale_after_days": 30,
+      "limit": 15,
+      "module": "people_pubs.sync.orcid_works",
+      "base_args": [
+        "--since",
+        "2019-01-01"
+      ],
+      "per_person_args": [
+        "--only-person-id",
+        "{person_id}"
+      ],
+      "dry_run_arg": "--dry-run"
+    },
+    {
+      "name": "crossref_search_orcid_person",
+      "enabled": true,
+      "source": "crossref_search_orcid",
+      "scope_type": "person",
+      "person_selector_sql": "SELECT io.person_id FROM app.identities_orcid io WHERE io.orcid IS NOT NULL AND io.orcid <> ''",
+      "stale_after_days": 30,
+      "limit": 15,
+      "module": "people_pubs.sync.crossref_search",
+      "base_args": [
+        "--from-year",
+        "2019",
+        "--to-year",
+        "2026",
+        "--count",
+        "100",
+        "--min-interval",
+        "1.0",
+        "--source-token",
+        "crossref"
+      ],
+      "per_person_args": [
+        "--only-person-id",
+        "{person_id}"
+      ],
+      "dry_run_arg": "--dry-run"
+    },
+    {
+      "name": "crossref_backfill_query",
+      "enabled": true,
+      "source": "crossref_backfill",
+      "scope_type": "query",
+      "scope_key": "crossref_backfill_global",
+      "stale_after_days": 14,
+      "limit": 1,
+      "module": "people_pubs.sync.crossref_backfill",
+      "base_args": [
+        "--max",
+        "200",
+        "--merge-mode",
+        "doi",
+        "--source-token",
+        "crossref",
+        "--sleep",
+        "0.2"
+      ],
+      "dry_run_arg": "--dry-run"
+    },
+    {
+      "name": "semantic_backfill_query",
+      "enabled": true,
+      "source": "semantic_backfill",
+      "scope_type": "query",
+      "scope_key": "semantic_backfill_global",
+      "stale_after_days": 30,
+      "limit": 1,
+      "module": "people_pubs.sync.semantic_scholar_backfill",
+      "base_args": [
+        "--max",
+        "150",
+        "--merge-mode",
+        "doi",
+        "--source-token",
+        "semantic",
+        "--sleep",
+        "1.0"
+      ],
+      "dry_run_arg": "--dry-run"
+    },
+    {
+      "name": "dblp_backfill_query",
+      "enabled": true,
+      "source": "dblp_backfill",
+      "scope_type": "query",
+      "scope_key": "dblp_backfill_global",
+      "stale_after_days": 30,
+      "limit": 1,
+      "module": "people_pubs.sync.dblp_backfill",
+      "base_args": [
+        "--max",
+        "150",
+        "--merge-mode",
+        "doi",
+        "--source-token",
+        "dblp",
+        "--sleep",
+        "1.0"
+      ],
+      "dry_run_arg": "--dry-run"
+    },
+    {
+      "name": "low_source_canon_backfill_query",
+      "enabled": true,
+      "source": "low_source_canon_backfill",
+      "scope_type": "query",
+      "scope_key": "low_source_canon_backfill_lt4",
+      "stale_after_days": 6,
+      "limit": 1,
+      "module": "people_pubs.sync.backfill_all",
+      "base_args": [
+        "--only-low-source-canon",
+        "--source-threshold",
+        "4",
+        "--max",
+        "150",
+        "--merge-mode",
+        "doi",
+        "--force",
+        "--crossref-sleep",
+        "0.2",
+        "--datacite-sleep",
+        "0.2",
+        "--skip-semantic"
+      ],
+      "dry_run_arg": "--dry-run"
+    }
+  ]
+}

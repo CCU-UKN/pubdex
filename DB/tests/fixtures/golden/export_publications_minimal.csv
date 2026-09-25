@@ -1,0 +1,5 @@
+pub_id,doi,title,year,venue,source_of_truth,internal_authors
+2,10.5555/pubdex-fixture-002,A second synthetic paper,2024,Journal of Synthetic Metadata,crossref,"Ada Example, Cleo Example"
+1,10.5555/pubdex-fixture-001,Synthetic Collective Behaviour Paper,2024,Journal of Synthetic Metadata,crossref+orcid,Ada Example
+3,,Older untitled venue-less record,2019,,orcid,
+4,10.5555/pubdex-fixture-004,Yearless provisional record,,,datacite,

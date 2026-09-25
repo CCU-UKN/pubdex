@@ -1,0 +1,40 @@
+{
+  "DOI": "10.5555/pubdex-fixture-001",
+  "type": "journal-article",
+  "title": [
+    "Synthetic Collective Behaviour Paper"
+  ],
+  "container-title": [
+    "Journal of Synthetic Metadata"
+  ],
+  "issued": {
+    "date-parts": [
+      [
+        2024,
+        5,
+        6
+      ]
+    ]
+  },
+  "author": [
+    {
+      "given": "Ada",
+      "family": "Example",
+      "ORCID": "https://orcid.org/0000-0000-0000-0001",
+      "affiliation": [
+        {
+          "name": "Synthetic Institute for Collective Behaviour"
+        }
+      ]
+    },
+    {
+      "given": "Bert",
+      "family": "Example",
+      "affiliation": [
+        {
+          "name": "Synthetic Institute for Collective Behaviour"
+        }
+      ]
+    }
+  ]
+}

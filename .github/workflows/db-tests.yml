@@ -1,0 +1,41 @@
+# GitHub adapter around the repository's default offline check suite.
+# Everything this job verifies lives in run_checks.sh, so the same result is
+# reproducible from a clone and on any other forge; only the checkout, the
+# interpreter and the dependency install are GitHub-specific here.
+#
+# The Docker-backed commands -- DB/run_migration_smoke.sh,
+# DB/run_task_1a_demo.sh and DB/run_integration_tests.sh -- are not run here
+# yet. Bringing the complete verification story into portable public CI is a
+# later result; this job is not that.
+name: DB tests
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history: the transform-version guard compares a commit range.
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install -r DB/requirements-dev.txt
+      - name: Run the default offline check suite
+        # On a pull request the base is the target commit; on a push it is the
+        # previous tip. The first push of a new branch reports an empty or
+        # all-zero SHA, which run_checks.sh reports as "no range" and accepts.
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.sha }}
+        run: ./run_checks.sh --base "$BASE" --head "$HEAD"

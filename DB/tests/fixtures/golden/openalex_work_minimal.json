@@ -1,0 +1,42 @@
+{
+  "id": "https://openalex.org/W9990000001",
+  "doi": "https://doi.org/10.5555/openalex-demo-0001",
+  "ids": {
+    "openalex": "https://openalex.org/W9990000001",
+    "doi": "https://doi.org/10.5555/openalex-demo-0001"
+  },
+  "title": "Synthetic Swarm Metadata Enrichment Paper",
+  "publication_year": 2024,
+  "publication_date": "2024-03-15",
+  "type": "article",
+  "primary_location": {
+    "source": {
+      "display_name": "Journal of Synthetic Metadata"
+    }
+  },
+  "authorships": [
+    {
+      "author_position": "first",
+      "raw_author_name": "Carberry, Josiah",
+      "author": {
+        "display_name": "Josiah Carberry",
+        "orcid": "https://orcid.org/0000-0002-1825-0097"
+      },
+      "raw_affiliation_strings": ["Example University, Psychoceramics Unit"],
+      "is_corresponding": true
+    },
+    {
+      "author_position": "last",
+      "raw_author_name": "",
+      "author": {
+        "display_name": "Ada Example"
+      },
+      "raw_affiliation_strings": [],
+      "institutions": [
+        {
+          "display_name": "Example Institute"
+        }
+      ]
+    }
+  ]
+}
