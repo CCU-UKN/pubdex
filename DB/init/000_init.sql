@@ -397,3 +397,9 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA pii GRANT SELECT, INSERT, UPDATE, DELETE ON T
 -- Optional: lock down public schema
 REVOKE ALL ON SCHEMA public FROM PUBLIC;
 GRANT USAGE ON SCHEMA public TO postgres;
+-- The extensions above live in public. The login roles need USAGE there to
+-- find their types, functions and operators -- the application casts values
+-- to citext, and a citext column, such as the pii email columns maintenance
+-- works on, compares case-insensitively only when its operators are found --
+-- but CREATE stays with the owner.
+GRANT USAGE ON SCHEMA public TO app_readonly, app_writer, maintenance;

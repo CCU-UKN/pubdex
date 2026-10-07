@@ -35,13 +35,28 @@ def _parse_dotenv(path: Path) -> Dict[str, str]:
     return out
 
 
-def _load_local_env() -> None:
-    # Prefer real process env; .env only fills missing values.
-    repo_db_env = Path(__file__).resolve().parents[1] / ".env"  # .../DB/.env
-    cwd_env = Path.cwd() / ".env"
-    for candidate in [repo_db_env, cwd_env]:
-        for k, v in _parse_dotenv(candidate).items():
-            os.environ.setdefault(k, v)
+def dotenv_disabled() -> bool:
+    """True when PEOPLE_PUBS_SKIP_DOTENV asks not to read any .env file.
+
+    The offline test suite sets it, so that a local DB/.env can never hand the
+    tests connection settings or other configuration.
+    """
+    value = os.environ.get("PEOPLE_PUBS_SKIP_DOTENV", "")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _load_local_env(candidates: Optional[List[Path]] = None) -> None:
+    # Prefer real process env; .env only fills missing values, and not at all
+    # when PEOPLE_PUBS_SKIP_DOTENV is set.
+    if candidates is None:
+        candidates = [
+            Path(__file__).resolve().parents[1] / ".env",  # .../DB/.env
+            Path.cwd() / ".env",
+        ]
+    if not dotenv_disabled():
+        for candidate in candidates:
+            for k, v in _parse_dotenv(candidate).items():
+                os.environ.setdefault(k, v)
 
     # Compose-style variable compatibility for direct script runs.
     if "PGDATABASE" not in os.environ and os.getenv("POSTGRES_DB"):

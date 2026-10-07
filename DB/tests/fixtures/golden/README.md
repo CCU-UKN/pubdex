@@ -15,11 +15,11 @@ These fixtures are intentionally tiny and synthetic. They exist to lock down ing
 - `openalex_work_minimal.json`
   Minimal OpenAlex work payload (DOI, publication year/date, primary-location venue, two authorships with raw/display names, ORCID URL, raw-affiliation and institution fallbacks). Used by `tests/test_openalex_fixture_ingest.py` and the OpenAlex idempotency integration test.
 - `datacite_work_minimal.json`
-  Minimal DataCite JSON:API work (titles, creators with nameIdentifiers/affiliations, publicationYear, container, types). Used by `tests/test_datacite_fixture_ingest.py`.
+  Minimal DataCite JSON:API work (titles, creators with nameIdentifiers/affiliations, publicationYear, container, types). Used by `tests/test_datacite_fixture_ingest.py` and the DataCite rerun in `tests/integration/test_backfill_rerun_integration.py`.
 - `semantic_scholar_paper_minimal.json`
-  Minimal Semantic Scholar graph-API paper (externalIds with uppercase DOI, venue vs publicationVenue, authors with ORCID/affiliations). Used by `tests/test_semantic_scholar_fixture_ingest.py`.
+  Minimal Semantic Scholar graph-API paper (externalIds with uppercase DOI, venue vs publicationVenue, authors with ORCID/affiliations). Used by `tests/test_semantic_scholar_fixture_ingest.py` and the Semantic Scholar rerun in `tests/integration/test_backfill_rerun_integration.py`.
 - `dblp_hit_minimal.json`
-  Minimal DBLP search hit (`info` with author list, trailing-period title, string year, doi + ee URL). Used by `tests/test_dblp_fixture_ingest.py`.
+  Minimal DBLP search hit (`info` with author list, trailing-period title, string year, doi + ee URL). Used by `tests/test_dblp_fixture_ingest.py` and the DBLP rerun in `tests/integration/test_backfill_rerun_integration.py`.
 - `source_coverage_minimal.csv`
   Golden output of `people_pubs.sync.source_coverage_report` for the synthetic rows in `tests/test_source_coverage_report.py`. Locks the coverage report's column set, family folding, and deterministic ordering.
 

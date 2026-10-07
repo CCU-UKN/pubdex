@@ -149,11 +149,11 @@ def test_refresh_runner_uses_role_specific_writer_password() -> None:
     env = _normalize_db_env(
         {
             "PGUSER": "app_writer",
-            "POSTGRES_PASSWORD": "superuser-secret",
-            "APP_WRITER_PASSWORD": "writer-secret",
+            "POSTGRES_PASSWORD": "example-superuser-secret",
+            "APP_WRITER_PASSWORD": "example-writer-secret",
         }
     )
-    assert env["PGPASSWORD"] == "writer-secret"
+    assert env["PGPASSWORD"] == "example-writer-secret"
 
 
 def test_merge_source_of_truth_preserves_specialized_funding_tokens() -> None:

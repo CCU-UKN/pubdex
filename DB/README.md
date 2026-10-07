@@ -106,6 +106,7 @@ At minimum, set `APP_READONLY_PASSWORD` because the default pgAdmin server entry
 ```bash
 docker exec peopledb-postgres psql -U postgres -d people_db -c "
 GRANT USAGE ON SCHEMA app, biblio, activity, staging_raw TO app_readonly;
+GRANT USAGE ON SCHEMA public TO app_readonly;
 GRANT SELECT ON ALL TABLES IN SCHEMA app, biblio, activity, staging_raw TO app_readonly;
 ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT SELECT ON TABLES TO app_readonly;
 ALTER DEFAULT PRIVILEGES IN SCHEMA biblio GRANT SELECT ON TABLES TO app_readonly;
@@ -229,6 +230,14 @@ The patch is idempotent and aligns the tracked bootstrap with current ingestion 
 - manual correction, authorship override, review-queue, and durable dedup/canon-scope decision tables
 - `biblio.authorships_curated` so manual authorship overrides survive reingest-facing reads
 - narrow `pii.*` write functions for routine ingestion as `app_writer`
+- `USAGE` (not `CREATE`) on schema `public`, which holds the `citext`,
+  `pgcrypto`, `unaccent` and `pg_trgm` extensions, for `app_writer`,
+  `app_readonly` and — where that role exists — `maintenance`: without it
+  the application's `citext` arguments to those functions fail and `citext`
+  columns, the `pii` email columns among them, compare case-sensitively for
+  these roles. The patch never creates the `maintenance` role, and applies
+  without it. Databases bootstrapped before this grant was added get it by
+  re-applying the patch.
 - refresh-state checkpoint support
 - `biblio.publications_clean` and `biblio.publications_canon`
 - `biblio.publications_canon_web`, the concurrently refreshed PubDex snapshot
@@ -518,15 +527,28 @@ Run the unit tests:
 ./run_tests.sh
 ```
 
+They run in a cleared environment with `PEOPLE_PUBS_SKIP_DOTENV=1`: no
+database setting or pytest option you export, and nothing in `DB/.env`, reaches
+them, so the integration tests always skip here, as the expected-skip policy
+in `tests/expected_skips.py` allows; any other skip fails the run, and a
+network guard refuses connections from the tests and the Python processes
+they start (`TESTING_STRATEGY.md` lists its boundaries). Arguments you pass
+still go to pytest.
+
 For the default offline check suite — compilation, Markdown consistency and
-this suite, exactly as CI runs them — use `../run_checks.sh` from here, or
-`./run_checks.sh` from the repository root. The Docker-backed commands
-(`./run_migration_smoke.sh`, `./run_task_1a_demo.sh` and
-`./run_integration_tests.sh`) are separate; see `TESTING_STRATEGY.md`.
+this suite — use `../run_checks.sh` from here, or `./run_checks.sh` from the
+repository root. `../run_ci_suite.sh` runs the complete suite that public CI
+runs: that offline suite, the check for committed secrets and local
+configuration, and the Docker-backed commands `./run_migration_smoke.sh`,
+`./run_task_1a_demo.sh` and `./run_disposable_integration.sh`, each of which
+also runs on its own; see `TESTING_STRATEGY.md`.
 
 The current suite is code-only and uses synthetic fixtures; it must not depend on live APIs, production backups, or real PII.
 
-Run optional disposable-DB integration tests only against a throwaway database:
+Run the integration tests only against a throwaway database.
+`./run_disposable_integration.sh` starts one, binds every connection setting to
+it, runs the whole integration suite and removes it again; against a
+disposable database of your own:
 
 ```bash
 PEOPLE_PUBS_INTEGRATION_DSN="postgresql://..." ./run_integration_tests.sh

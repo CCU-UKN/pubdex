@@ -1,0 +1,51 @@
+# Forgejo Actions adapter around the repository's complete verification suite,
+# the counterpart of .github/workflows/db-tests.yml. Everything this job
+# verifies lives in run_ci_suite.sh and the tracked scripts it calls: the job
+# checks the repository out with its history, installs DB/requirements-dev.txt
+# into .venv and runs ./run_ci_suite.sh with the event's commit range.
+#
+# It needs a Forgejo Runner that has the label below as a host label
+# (pubdex-ci-host:host), so that the job runs directly on a machine meeting
+# the runner contract in DB/TESTING_STRATEGY.md, "Running the suite
+# elsewhere", with python3.11 on PATH and Node.js for the checkout action. A
+# runner that runs jobs in containers does not meet it.
+#
+# The checkout action is GitHub's actions/checkout at the commit the GitHub
+# workflow pins, fetched from Forgejo's mirror by absolute URL. No action
+# installs Python, because actions/setup-python downloads its interpreters
+# from GitHub; the runner provides python3.11, and the suite's log records
+# the versions each run used. pip and the packages are pinned as in the
+# GitHub workflow. Forgejo documents `permissions:` as ignored, so none is
+# set; the automatic token is not stored in the checkout.
+name: DB tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: pubdex-ci-host
+    timeout-minutes: 30
+    steps:
+      - uses: https://data.forgejo.org/actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          # Full history: the transform-version guard and the check of the
+          # pushed or proposed commits read the commit range.
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install dependencies
+        run: |
+          python3.11 -m venv .venv
+          .venv/bin/python -m pip install pip==26.2.1
+          .venv/bin/python -m pip install -r DB/requirements-dev.txt
+      - name: Run the complete verification suite
+        # Forgejo runs a pull request's head commit, not a merge commit, so
+        # its range starts at the merge base the event names. A push starts
+        # at the previous tip; the first push of a branch or tag reports an
+        # all-zero SHA, for which the transform-version guard has no range
+        # and the secrets check reads every commit reachable from the head.
+        env:
+          BASE: ${{ forgejo.event.pull_request.merge_base || forgejo.event.before }}
+          HEAD: ${{ forgejo.sha }}
+        run: ./run_ci_suite.sh --base "$BASE" --head "$HEAD"

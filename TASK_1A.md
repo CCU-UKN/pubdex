@@ -1,16 +1,17 @@
 # Task 1a — public-safe repository, licensing and clean-clone baseline
 
-**Candidate verification record.**
+**Published verification record.**
 
 Initial candidate prepared: 2026-09-10. The amended candidate was verified on
-2026-09-25 using the commands below. Planned evidence tag:
+2026-09-25 using the commands below and published the same day at
+<https://github.com/CCU-UKN/pubdex>, with evidence tag
 `public-baseline-1a`.
 
-Public availability is established by anonymous access to the canonical
-repository and its evidence tag, plus successful verification from a fresh
-clone. This dated candidate record does not claim that those publication
-criteria have been met, and repository verification does not assert external
-acceptance of task 1a.
+Public availability is established by anonymous access to that canonical
+repository and its evidence tag. The fresh-checkout verification recorded
+below establishes that the published baseline passes its documented checks.
+Publication and repository verification do not assert external acceptance of
+task 1a.
 
 This is the acceptance record for the first funded result of the PubDex
 project: what was required, which files carry it, and the command anyone can
@@ -22,9 +23,9 @@ which of them applies:
 
 - **repository implementation** — complete in the 2026-09-25 verification
   snapshot, and checkable by the commands below;
-- **public availability** — evidenced separately by anonymous access to the
-  canonical repository and `public-baseline-1a` tag, plus successful
-  fresh-clone verification;
+- **public availability** — complete on 2026-09-25, evidenced by anonymous
+  access to the canonical repository and `public-baseline-1a` tag, plus
+  successful fresh-checkout verification;
 - **external acceptance** — not asserted here; confirmation is still required
   for how "query the baseline API" in the agreed wording maps onto the
   interface described under *What "query the baseline interface" means here*.
@@ -53,10 +54,10 @@ material that has no place in a public repository.
 
 | Required | Where it lives | How to verify | Expected result |
 |---|---|---|---|
-| A public repository under the PubDex name | this repository | *(after publication)* open it | **expected:** one public root commit, tagged `public-baseline-1a` |
+| A public repository under the PubDex name | [canonical repository](https://github.com/CCU-UKN/pubdex) | open it without signing in and select tag `public-baseline-1a` | one public root commit at the evidence tag |
 | A curated copy of the code and documentation | [`DB/`](DB/), [`README.md`](README.md), [`DB/README.md`](DB/README.md), [`DB/SCRIPTS.md`](DB/SCRIPTS.md), [`DB/TESTING_STRATEGY.md`](DB/TESTING_STRATEGY.md) | `./run_checks.sh` | the default offline check suite passes; every Markdown link resolves inside the repository; the ingestion package integrates ORCID, Crossref, OpenAlex, DataCite, DBLP and Semantic Scholar, plus manual CSV/DOI import, and the offline fixture suite covers each of them |
 | MIT and CC BY licences | [`LICENSE`](LICENSE), [`LICENSE-CC-BY-4.0`](LICENSE-CC-BY-4.0) | read them, and the Licensing section of [`README.md`](README.md) | code under MIT, documentation and synthetic examples under CC BY 4.0, with the boundary stated |
-| A secret-free example configuration | [`.env.example`](.env.example) | read it against the variables the walkthrough sets | every value is a documented placeholder; the pre-publication review (below) reported no credential or private-host finding in the candidate tree |
+| A secret-free example configuration | [`.env.example`](.env.example) | read it against the variables the walkthrough sets | every value is a documented placeholder; the pre-publication review (below) reported no credential or private-host finding in the published baseline tree |
 | A project description | [`README.md`](README.md) | read it | what PubDex does, how it is laid out, how to start |
 | A public progress record | [`CHANGELOG.md`](CHANGELOG.md) | read it | one entry per funded result, with verification commands |
 | The grant acknowledgement | Funding section of [`README.md`](README.md) | read it | the NGI0 Commons Fund acknowledgement, the EU grant agreement number and the project number |
@@ -140,20 +141,25 @@ claims to serve one, and no command here starts a network endpoint.
 | `./DB/run_task_1a_demo.sh` | The clean-clone acceptance path above, end to end and offline. |
 | `(cd DB && PEOPLE_PUBS_INTEGRATION_DSN=... ./run_integration_tests.sh)` | The disposable-database integration suite, including the end-to-end fixture path and the primary-email policy. |
 
-Making the complete suite run from a clean checkout in portable public CI is a
-separate, later result; the workflow in `.github/workflows/` is currently an
-adapter that installs dependencies and calls `run_checks.sh`, so the checks
-themselves are reproducible on any Git forge.
+Running this complete verification story from a clean checkout in portable
+public CI is the next funded result, task 1b, recorded in
+[`TASK_1B.md`](TASK_1B.md): `./run_ci_suite.sh` runs the commands above in one
+go, together with a check for committed secrets and local configuration, and
+the workflow in `.github/workflows/` is an adapter that installs the
+dependencies and calls it. Whether that workflow has passed in public CI is
+recorded there, not here.
 
 ## Public-safety review before publication
 
 This section records a completed review, not a reproducible public tool: the
 scanner used is a maintainer-side heuristic that encodes patterns specific to
-the private project, so it is deliberately not published. Checks for committed
-secrets and local configuration in public CI are planned as a later funded
-result.
+the private project, so it is deliberately not published. A generic public
+check for committed secrets and local configuration is part of task 1b
+([`check_secrets_and_local_config.py`](check_secrets_and_local_config.py), see
+[`TASK_1B.md`](TASK_1B.md)); it guards the tree from then on and does not
+replace the review recorded here.
 
-The candidate public tree was scanned and reviewed against the following
+The published baseline tree was scanned and reviewed against the following
 categories:
 
 - credentials, tokens, connection strings with passwords and private keys;

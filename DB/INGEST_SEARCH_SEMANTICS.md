@@ -92,7 +92,7 @@ discovery job, so that column records what a portal would need if one were added
   ```bash
   PYTHONPATH=. ../.venv/bin/python -m people_pubs.sync.estimate_search_jobs
   ```
-- **Guardrail tests** (part of the default offline check suite, `run_checks.sh` at the repository root, which is also what CI invokes):
+- **Guardrail tests** (part of the default offline check suite, `run_checks.sh` at the repository root, which is also the first stage of what CI runs):
   - `tests/test_refresh_jobs_guardrails.py` — every discovery job is capped, skips existing, and
     affiliation jobs carry the post-filter; since only the Crossref searcher implements it, an
     affiliation job on any other portal fails the check.

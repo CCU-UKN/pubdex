@@ -135,6 +135,8 @@ No connection setup is needed beyond step 1: ingestion resolves its
 connection from `--dsn`, `PEOPLE_DB_DSN`, or `PG*` environment variables,
 with `DB/.env` filling every gap (`people_pubs/config.py` reads it — the
 template's `PGHOST`/`PGDATABASE`/`PGPASSWORD` keys cover this walkthrough).
+`PEOPLE_PUBS_SKIP_DOTENV=1` switches that fill-in off; the check suites set
+it, so that their tests never see your `DB/.env`.
 On a fresh private instance running as `postgres` is fine; for shared
 installs create the app roles first — `DB/README.md` §2.6.
 
@@ -339,20 +341,21 @@ Carberry's works do not carry it. That is the safe default working as intended
 ## 10. Run the checks
 
 ```bash
-./run_checks.sh                         # default offline suite (what CI runs)
-(cd DB && ./run_migration_smoke.sh)     # schema-from-empty + patch idempotency
-./DB/run_task_1a_demo.sh                # the clean-clone acceptance path, offline
-# Optional, against a disposable DB only:
-# (cd DB && PEOPLE_PUBS_INTEGRATION_DSN="postgresql://..." ./run_integration_tests.sh)
+./run_checks.sh                         # fast offline suite (the pre-commit hook)
+./run_ci_suite.sh                       # everything public CI runs; needs Docker
 ```
 
 `run_checks.sh` is the default offline check suite. The default invocation
 runs compilation, Markdown consistency and the offline unit/fixture suite; in
 pre-commit and CI modes (`--staged`, or `--base`/`--head`) it additionally runs
-the transform-version guard. It is not the whole verification story: the
-migration smoke, the acceptance demonstration and the disposable-database
-integration suite are separate commands, listed above.
-`(cd DB && ./run_tests.sh)` still runs the unit tests alone.
+the transform-version guard. `run_ci_suite.sh` runs the whole verification
+story in one command, exactly as public CI does: that offline suite, the check
+for committed secrets and local configuration, the migration smoke, the
+acceptance demonstration and the integration suite, each Docker-backed stage on
+a disposable PostgreSQL of its own. Every stage also runs on its own, for
+example `(cd DB && ./run_migration_smoke.sh)`, `./DB/run_task_1a_demo.sh` or
+`./DB/run_disposable_integration.sh`, and `(cd DB && ./run_tests.sh)` still
+runs the unit tests alone.
 
 ## Troubleshooting
 

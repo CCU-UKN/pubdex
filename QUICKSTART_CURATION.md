@@ -145,15 +145,15 @@ exports of unchanged data are byte-identical.
 ## 5. Run all checks
 
 ```bash
-./run_checks.sh                         # default offline suite (same as CI)
-./DB/run_task_1a_demo.sh                # clean-clone acceptance path, offline
+./run_checks.sh                         # fast offline suite
+./run_ci_suite.sh                       # the complete suite, as public CI runs it; needs Docker
 ```
 
-For the integration tests, which need a disposable database, run the recipe
-in [`DB/TESTING_STRATEGY.md`](DB/TESTING_STRATEGY.md) → *Running the
-integration suite in a disposable container* from `DB/`. It waits for the
-schema bootstrap to finish before any test starts, and removes only the
-container it created.
+For the integration tests alone, `./DB/run_disposable_integration.sh` starts a
+disposable PostgreSQL, waits for the schema bootstrap to finish before any test
+starts, and removes only what it created;
+[`DB/TESTING_STRATEGY.md`](DB/TESTING_STRATEGY.md) → *Running the integration
+suite in a disposable container* describes what it guarantees.
 
 ## Troubleshooting
 

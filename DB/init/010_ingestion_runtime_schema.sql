@@ -1805,6 +1805,22 @@ GRANT USAGE ON SCHEMA app, biblio, activity TO app_readonly, app_writer;
 GRANT SELECT ON ALL TABLES IN SCHEMA app, biblio, activity TO app_readonly;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA app, biblio, activity TO app_writer;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA app, biblio, activity TO app_writer;
+-- The extensions (citext, pgcrypto, unaccent, pg_trgm) live in public, whose
+-- privileges 000_init.sql revokes from PUBLIC. Without USAGE there the roles
+-- cannot name citext -- the pii write functions below are called with citext
+-- arguments -- and their comparisons of citext columns fall back to
+-- case-sensitive text. USAGE only: CREATE in public stays with the owner.
+GRANT USAGE ON SCHEMA public TO app_readonly, app_writer;
+-- The same for maintenance, whose pii email columns are citext. A database
+-- restored into a cluster without that role has nothing to grant, and this
+-- patch does not create the role.
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'maintenance') THEN
+    EXECUTE 'GRANT USAGE ON SCHEMA public TO maintenance';
+  END IF;
+END
+$$;
 
 -- Scheduled ingestion intentionally touches only these PII surfaces:
 -- ORCID profile refresh merges verified emails into people_pii, and publication

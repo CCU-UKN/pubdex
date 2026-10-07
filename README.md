@@ -35,6 +35,8 @@ published.
 
 [`TASK_1A.md`](TASK_1A.md) is the acceptance record for that result: what was
 required, which files carry it, and the command that verifies each part.
+[`TASK_1B.md`](TASK_1B.md) does the same for the second one, the complete test
+suite as one forge-portable command that public CI runs from a clean checkout.
 
 Later funded results will be introduced in their own commits and recorded in
 [`CHANGELOG.md`](CHANGELOG.md) against the task they deliver and the way it
@@ -60,14 +62,19 @@ NLnet project number: 2026-02-585.
 | Path | What it is |
 |---|---|
 | [`DB/`](DB/) | Everything: the PostgreSQL schema ([`DB/init/`](DB/init/)), the Docker Compose service ([`DB/compose.yaml`](DB/compose.yaml)), the `people_pubs` Python package, its tests, and the operator scripts |
-| [`run_checks.sh`](run_checks.sh) | The default offline check suite: compilation, Markdown consistency and the offline unit and fixture tests, plus the transform-version guard in pre-commit and CI modes. Run it locally; CI invokes the same script |
+| [`run_checks.sh`](run_checks.sh) | The fast offline check suite: compilation, Markdown consistency and the offline unit and fixture tests, plus the transform-version guard in pre-commit and CI modes. The pre-commit hook, and the first stage of `run_ci_suite.sh` |
+| [`run_ci_suite.sh`](run_ci_suite.sh) | The complete verification suite in one command, and exactly what public CI runs: the offline suite, the check for committed secrets and local configuration, migration from an empty database, the task-1a demonstration and the integration suite on a disposable PostgreSQL |
+| [`check_secrets_and_local_config.py`](check_secrets_and_local_config.py) | The check for committed secrets and local configuration over the publishable tree; findings name rule, file and line, never the matched text |
 | [`DB/run_task_1a_demo.sh`](DB/run_task_1a_demo.sh) | The clean-clone acceptance demonstration: a disposable database, bundled ORCID and Crossref payloads, queries and a verified export, with no metadata-provider request |
+| [`DB/run_disposable_integration.sh`](DB/run_disposable_integration.sh) | The complete integration suite against a PostgreSQL started, bound and removed for that run alone |
 | [`CHANGELOG.md`](CHANGELOG.md) | The public progress record: what each funded result delivered, and how to verify it |
 | [`TASK_1A.md`](TASK_1A.md) | The acceptance record for the first funded result, requirement by requirement |
+| [`TASK_1B.md`](TASK_1B.md) | The acceptance record for the second funded result, the forge-portable test suite |
 | [`DEVELOPMENT_METHODS.md`](DEVELOPMENT_METHODS.md) | How the initial public baseline was prepared, reviewed and verified |
 | [`QUICKSTART.md`](QUICKSTART.md) | Clean clone to a running database with demo data, a query over what landed, and an export |
 | [`QUICKSTART_CURATION.md`](QUICKSTART_CURATION.md) | Curation, aliases and reporting exports on top of that state |
-| [`.github/workflows/db-tests.yml`](.github/workflows/db-tests.yml) | GitHub adapter: it checks out the repository, installs the dependencies and invokes `run_checks.sh`. The checks themselves live in that script, so any forge can run them |
+| [`.github/workflows/db-tests.yml`](.github/workflows/db-tests.yml) | GitHub adapter: it checks out the repository, installs the dependencies and invokes `run_ci_suite.sh`. The checks themselves live in tracked scripts, so any forge can run them |
+| [`.forgejo/workflows/db-tests.yml`](.forgejo/workflows/db-tests.yml) | The same adapter for Forgejo Actions, for a self-hosted runner that runs the job on its host ([`DB/TESTING_STRATEGY.md`](DB/TESTING_STRATEGY.md), *Forgejo Actions*) |
 | [`LICENSE`](LICENSE), [`LICENSE-CC-BY-4.0`](LICENSE-CC-BY-4.0) | The two licences described below |
 
 ## Getting started
@@ -81,22 +88,6 @@ python3 -m venv .venv
 
 ./run_checks.sh                  # offline; needs no database and no network
 ```
-
-`run_checks.sh` is the **default offline check suite** and the one CI invokes.
-The default invocation runs compilation of the package and its tests, the
-Markdown link and path check, and the offline unit and fixture tests; in
-pre-commit and CI modes (`--staged`, or `--base`/`--head`) it additionally runs
-the transform-version guard. It is not the whole verification story — these are
-separate commands:
-
-- `(cd DB && ./run_migration_smoke.sh)` — the schema bootstraps from an empty
-  database and the runtime patch re-applies cleanly.
-- `./DB/run_task_1a_demo.sh` — the clean-clone acceptance path end to end,
-  against its own disposable database, with no metadata-provider request.
-- `(cd DB && PEOPLE_PUBS_INTEGRATION_DSN=... ./run_integration_tests.sh)` — the
-  disposable-database integration suite.
-
-To run only the unit tests, `(cd DB && ./run_tests.sh)` still works.
 
 The schema bootstraps itself on the first start with an empty data volume.
 From there:
@@ -113,6 +104,53 @@ Every `people_pubs.sync` command that writes to a database supports
 `--dry-run`, with two exceptions: `merge_people` only previews unless given
 `--execute`, and the fixture demonstration `fixture_demo` has no preview mode.
 Prefer a dry run on first contact with any database you care about.
+
+### Running the checks
+
+Two commands, both from the repository root:
+
+- `./run_checks.sh` — the **fast offline check suite**: compilation of the
+  package and its tests, the Markdown link and path check, and the offline unit
+  and source-fixture tests; in pre-commit and CI modes (`--staged`, or
+  `--base`/`--head`) it additionally runs the transform-version guard. It needs
+  only the Python environment and a Git checkout — no database, no Docker, no
+  network — and it is the pre-commit hook. Its tests run in a cleared
+  environment, so no database setting or pytest option you export, and nothing
+  in `DB/.env`, can connect them to a database or narrow the run; a network
+  guard refuses connections from the tests and the Python processes they
+  start, and a skip that `DB/tests/expected_skips.py` does not name, or a test
+  module skipped while it is collected, fails the run.
+- `./run_ci_suite.sh` — the **complete verification suite** in one command,
+  and exactly what public CI runs: the offline suite, a check for committed
+  secrets and local configuration, schema bootstrap from an empty database, the
+  task-1a clean-clone demonstration, and the complete integration suite against
+  its own disposable PostgreSQL. It stops at the first failing stage;
+  `--base <sha> [--head <sha>]` adds the transform-version guard over that
+  commit range and checks the files its commits add or change for secrets
+  and local configuration, as CI does for every push and pull request. It
+  needs Bash and a Docker Engine running on the same machine;
+  [`DB/TESTING_STRATEGY.md`](DB/TESTING_STRATEGY.md) gives the contract a CI
+  runner on another forge has to meet.
+
+```bash
+./run_ci_suite.sh                # everything CI runs; needs Docker
+```
+
+The complete suite needs a Git checkout, Python 3.11 with
+`DB/requirements-dev.txt` installed into `.venv` (as above), and a Docker Engine
+your user can reach and that can pull `postgres:16`. It uses only synthetic
+fixtures and disposable databases: each Docker-backed stage starts its own
+uniquely named PostgreSQL container, publishes it on loopback at most, and
+removes it again when the stage ends, also after a failure or an interrupt;
+its throwaway password never appears on a command line or in the output. No
+stage uses Docker Compose, connects to an existing database or a metadata
+provider, or reads `DB/.env`, so the suite does not need the Compose service
+started above.
+
+Each stage is also a command of its own for focused debugging — for example
+`(cd DB && ./run_migration_smoke.sh)` or `./DB/run_disposable_integration.sh`;
+[`DB/TESTING_STRATEGY.md`](DB/TESTING_STRATEGY.md) lists them all. To run only
+the unit tests, `(cd DB && ./run_tests.sh)` still works.
 
 ## Licensing
 

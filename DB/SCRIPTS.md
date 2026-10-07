@@ -402,6 +402,26 @@ python -m people_pubs.sync.datacite_backfill --max 200 --merge-mode doi --debug
 python -m people_pubs.sync.dblp_backfill --max 200 --merge-mode doi --debug
 ```
 
+### Field precedence of the enrichment backfills
+Which publications a backfill selects ("missing metadata" above: no payload
+from that source yet, or a missing DOI, year or venue; every selected row
+with `--force`) is separate from which stored values it replaces once it has
+a match:
+- Crossref, DataCite, DBLP and Semantic Scholar replace the title, year and
+  venue with any value the provider supplies, whatever source supplied the
+  stored one; a value the provider does not supply stays, and an existing DOI
+  is never rewritten.
+- OpenAlex alone consults the trust order (`TRUST_ORDER_PUBLICATIONS` in
+  `people_pubs/config.py`): it fills missing values but replaces none that a
+  more trusted source backed.
+- So a DataCite, DBLP or Semantic Scholar run, especially with `--force` as
+  in the weekly low-source canon backfill, can replace values stored from
+  Crossref, and a DBLP run values stored from ORCID, although the trust order
+  ranks both higher. Whether these three should defer to the trust order as
+  OpenAlex does is an open decision; until it is taken, the
+  characterization tests described in `TESTING_STRATEGY.md` pin the current
+  behaviour, so that it changes only deliberately.
+
 ### All backfills (default: Crossref + DataCite + Semantic Scholar)
 `DB/people_pubs/sync/backfill_all.py`
 - Runs the standard backfills in sequence with shared flags.

@@ -21,15 +21,23 @@
 # organisation's own authors.
 #
 # Runs against a disposable PostgreSQL container with its own volume. Both
-# carry a unique per-run name and a run label; the database is published only
-# on a dynamically assigned loopback port; and the cleanup registered before
-# anything is created removes only those resources, even after a failed start
-# or an interrupted run. Existing containers and volumes are never touched: a
-# name collision aborts instead of taking the resource over. Docker Compose is
-# never used, so no long-lived instance of this project can be reached.
+# carry a unique per-run name and a run label, and the database is published
+# only on a dynamically assigned loopback port. The cleanup is registered
+# before anything is created and runs on every ordinary exit and after SIGINT,
+# SIGTERM or SIGHUP -- also after a failed start -- ignoring further signals
+# meanwhile. It removes only what carries this run's label, and the run's
+# private temporary directory, and then confirms that nothing is left. SIGKILL
+# skips the cleanup; a failed removal or a daemon that stops answering can
+# leave something behind as well, but then the run says so, prints the
+# commands that find the leftovers, and fails. Existing containers and volumes
+# are never touched: a name collision aborts instead of taking the resource
+# over. Docker Compose is never used, so no long-lived instance of this project
+# can be reached. This lifecycle is shared with the other Docker-backed scripts
+# through lib/disposable_postgres.sh.
 #
 #   ./run_task_1a_demo.sh                    # full run (needs Docker)
-#   TASK_1A_PG_IMAGE=postgres:16 ./run_task_1a_demo.sh
+#   TASK_1A_PG_IMAGE=postgres:16@sha256:<digest> ./run_task_1a_demo.sh
+#   (DISPOSABLE_PG_IMAGE sets the image of all three Docker-backed scripts at once)
 set -euo pipefail
 
 DB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -43,131 +51,63 @@ if [ ! -x "$PYTHON" ]; then
   exit 1
 fi
 
-IMAGE="${TASK_1A_PG_IMAGE:-postgres:16}"
+IMAGE="${TASK_1A_PG_IMAGE:-${DISPOSABLE_PG_IMAGE:-postgres:16}}"
 WAIT_SECONDS="${TASK_1A_WAIT_SECONDS:-120}"
-RUN_ID="$(date +%Y%m%d%H%M%S)-$$-$(od -An -N4 -tx4 /dev/urandom | tr -d ' \n')"
-CONTAINER="pubdex-task-1a-demo-${RUN_ID}"
-VOLUME="pubdex-task-1a-demo-${RUN_ID}"
 LABEL_KEY="pubdex.task-1a-demo.run"
-
-# Throwaway, test-only password for a container that lives for the length of
-# this run and is published on loopback only. It appears in no tracked
+RESOURCE_PREFIX="pubdex-task-1a-demo-"
+# The throwaway superuser password of a container that lives for the length
+# of this run and is published on loopback only: it appears in no tracked
 # configuration and is discarded with the container and its volume.
-PGPASS="demo-$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')"
-WORKDIR="$(mktemp -d)"
-chmod 700 "$WORKDIR"
-
-# Registered before anything is created: removes only the container and volume
-# carrying this run's label, so a resource that merely shares a name is left
-# alone. The long-lived project containers carry no such label and are
-# therefore unreachable from here.
-cleanup() {
-  local rc=$?
-  trap - EXIT
-  if docker container inspect "$CONTAINER" >/dev/null 2>&1 \
-     && [ "$(docker container inspect -f "{{ index .Config.Labels \"$LABEL_KEY\" }}" "$CONTAINER" 2>/dev/null)" = "$RUN_ID" ]; then
-    docker rm -f -v "$CONTAINER" >/dev/null 2>&1 || true
-  fi
-  if docker volume inspect "$VOLUME" >/dev/null 2>&1 \
-     && [ "$(docker volume inspect -f "{{ index .Labels \"$LABEL_KEY\" }}" "$VOLUME" 2>/dev/null)" = "$RUN_ID" ]; then
-    docker volume rm "$VOLUME" >/dev/null 2>&1 || true
-  fi
-  [ -d "$WORKDIR" ] && rm -rf "$WORKDIR"
-  exit "$rc"
-}
-trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
-
-# Never take over a resource that already exists, however unlikely a collision.
-if docker container inspect "$CONTAINER" >/dev/null 2>&1; then
-  echo "ERROR: a container named $CONTAINER already exists; not touching it." >&2
-  exit 1
-fi
-if docker volume inspect "$VOLUME" >/dev/null 2>&1; then
-  echo "ERROR: a volume named $VOLUME already exists; not touching it." >&2
-  exit 1
-fi
-
-fail() {
-  echo "ERROR: $*" >&2
-  exit 1
-}
+PASSWORD_PREFIX="demo"
+# shellcheck source=lib/disposable_postgres.sh
+source "$DB_DIR/lib/disposable_postgres.sh"
+pg_begin_run
+pg_make_workdir
 
 psql_demo() {
   docker exec -i "$CONTAINER" psql -v ON_ERROR_STOP=1 -q -U postgres -d people_db "$@"
 }
 
 echo "[1/8] Starting disposable PostgreSQL ($IMAGE) with DB/init/ mounted (run $RUN_ID)..."
-docker volume create --label "$LABEL_KEY=$RUN_ID" "$VOLUME" >/dev/null
-docker run -d --name "$CONTAINER" --label "$LABEL_KEY=$RUN_ID" \
-  -e POSTGRES_PASSWORD="$PGPASS" -e POSTGRES_DB=people_db \
-  -p 127.0.0.1::5432 \
-  -v "$VOLUME:/var/lib/postgresql/data" \
-  -v "$DB_DIR/init:/docker-entrypoint-initdb.d:ro" \
-  "$IMAGE" >/dev/null
+pg_start loopback
 
-# The entrypoint runs the init scripts against a socket-only temporary server
-# and only then starts the real one. Require its completion message, evidence
-# that every init/*.sql was run, and TCP readiness; stop waiting as soon as the
-# container exits (a failed init script stops it).
 echo "[2/8] Waiting for the schema to bootstrap, up to ${WAIT_SECONDS}s..."
-bootstrapped() {
-  local logs
-  logs="$(docker logs "$CONTAINER" 2>&1)" || return 1
-  grep -q 'PostgreSQL init process complete' <<<"$logs" || return 1
-  local script
-  for script in "$DB_DIR"/init/*.sql; do
-    grep -q "running /docker-entrypoint-initdb.d/$(basename "$script")" <<<"$logs" || return 1
-  done
-  docker exec "$CONTAINER" pg_isready -h 127.0.0.1 -U postgres -d people_db >/dev/null 2>&1
-}
-ready=0
-for _ in $(seq "$WAIT_SECONDS"); do
-  if [ "$(docker container inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null)" != "true" ]; then
-    echo "ERROR: the database container stopped during bootstrap; container log tail:" >&2
-    docker logs --tail 40 "$CONTAINER" >&2 || true
-    exit 1
-  fi
-  if bootstrapped; then
-    ready=1
-    break
-  fi
-  sleep 1
-done
-[ "$ready" -eq 1 ] || fail "database not bootstrapped after ${WAIT_SECONDS}s"
-
-PORT="$(docker port "$CONTAINER" 5432/tcp | head -1 | sed 's/.*://')"
-[ -n "$PORT" ] || fail "could not determine the mapped loopback port"
+pg_wait_for_bootstrap
+pg_report_server
+pg_loopback_port
 DSN="postgresql://postgres:${PGPASS}@127.0.0.1:${PORT}/people_db"
 
-# Every Python step runs with a cleared environment and an explicit DSN, so no
-# PG*/POSTGRES_* variable and no DB/.env value can redirect a write towards a
-# database that is not the disposable one created above.
-demo_python() {
-  env -i \
-    HOME="$HOME" \
-    PATH="$PATH" \
-    LANG="${LANG:-C.UTF-8}" \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONPATH="$DB_DIR" \
-    PEOPLE_DB_DSN="$DSN" \
-    PEOPLE_PUBS_CROSSREF_MAILTO="you@example.org" \
-    "$PYTHON" "$@"
-}
+# Every Python step runs in a subshell whose environment holds only what it
+# needs. PEOPLE_DB_DSN and the libpq PG* settings all name the disposable
+# database created above, so no inherited variable can redirect a write, and
+# PEOPLE_PUBS_SKIP_DOTENV keeps people_pubs from reading DB/.env at all. The
+# shell exports these values itself and then execs Python, so the connection
+# string and the password appear on no command line: the steps take no --dsn
+# argument and read PEOPLE_DB_DSN instead.
+demo_python() (
+  home="${HOME:-$WORKDIR}"
+  path="$PATH"
+  lang="${LANG:-C.UTF-8}"
+  clear_exports
+  export HOME="$home" PATH="$path" LANG="$lang" \
+    PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$DB_DIR" PEOPLE_PUBS_SKIP_DOTENV=1 \
+    PEOPLE_DB_DSN="$DSN" PEOPLE_PUBS_CROSSREF_MAILTO="you@example.org" \
+    PGHOST=127.0.0.1 PGHOSTADDR=127.0.0.1 PGPORT="$PORT" PGUSER=postgres \
+    PGPASSWORD="$PGPASS" PGDATABASE=people_db PGSSLMODE=disable \
+    PGSERVICEFILE=/dev/null PGSYSCONFDIR="$WORKDIR" PGPASSFILE=/dev/null
+  exec "$PYTHON" "$@"
+)
 
 echo "[3/8] Importing the bundled synthetic roster..."
 demo_python -m people_pubs.sync.add_people \
-  --dsn "$DSN" \
   --csv "$DB_DIR/tests/fixtures/golden/demo_roster_minimal.csv" \
   --no-orcid-lookup
 
 echo "[4/8] Ingesting the bundled ORCID payload, then enriching it with Crossref..."
-demo_python -m people_pubs.sync.fixture_demo --dsn "$DSN"
+demo_python -m people_pubs.sync.fixture_demo
 
 echo "[5/8] Configuring fictional institutional attribution..."
 demo_python -m people_pubs.sync.attribution_rules set \
-  --dsn "$DSN" \
   --affiliation "Synthetic Institute for Collective Behaviour"
 
 echo "[6/8] Querying the stored publication and its cumulative provenance..."
@@ -261,7 +201,6 @@ SQL
 
 echo "[8/8] Producing and verifying the export..."
 demo_python -m people_pubs.sync.export_publications \
-  --dsn "$DSN" \
   --output "$WORKDIR/publications.csv"
 
 demo_python - "$WORKDIR/publications.csv" <<'PY'

@@ -1,12 +1,16 @@
-# GitHub adapter around the repository's default offline check suite.
-# Everything this job verifies lives in run_checks.sh, so the same result is
-# reproducible from a clone and on any other forge; only the checkout, the
-# interpreter and the dependency install are GitHub-specific here.
+# GitHub adapter around the repository's complete verification suite.
+# Everything this job verifies lives in run_ci_suite.sh and the tracked scripts
+# it calls, so the same result is reproducible from a clone and on any other
+# forge: install DB/requirements-dev.txt into .venv, then run
+# ./run_ci_suite.sh. Only the checkout, the interpreter and the dependency
+# install are GitHub-specific here. The Docker-backed stages use the runner's
+# own Docker Engine; the job needs no service container, registry login or
+# repository secret.
 #
-# The Docker-backed commands -- DB/run_migration_smoke.sh,
-# DB/run_task_1a_demo.sh and DB/run_integration_tests.sh -- are not run here
-# yet. Bringing the complete verification story into portable public CI is a
-# later result; this job is not that.
+# The inputs that would otherwise move are fixed: a runner image release, the
+# actions by commit, and exact Python and pip versions. The runner image still
+# receives updates, and the suite's log records the versions each run used
+# (DB/TESTING_STRATEGY.md, "Reproducing a verified run").
 name: DB tests
 
 on:
@@ -15,27 +19,34 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
   checks:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
-          # Full history: the transform-version guard compares a commit range.
+          # Full history: the transform-version guard and the check of the
+          # pushed or proposed commits read the commit range.
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
         with:
-          python-version: "3.11"
+          python-version: "3.11.17"
       - name: Install dependencies
         run: |
           python -m venv .venv
-          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install pip==26.2.1
           .venv/bin/python -m pip install -r DB/requirements-dev.txt
-      - name: Run the default offline check suite
+      - name: Run the complete verification suite
         # On a pull request the base is the target commit; on a push it is the
         # previous tip. The first push of a new branch reports an empty or
-        # all-zero SHA, which run_checks.sh reports as "no range" and accepts.
+        # all-zero SHA: the transform-version guard then has no range to
+        # check, and the secrets check reads every commit reachable from HEAD.
         env:
           BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
           HEAD: ${{ github.sha }}
-        run: ./run_checks.sh --base "$BASE" --head "$HEAD"
+        run: ./run_ci_suite.sh --base "$BASE" --head "$HEAD"

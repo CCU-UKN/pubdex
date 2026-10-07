@@ -9,6 +9,9 @@ from __future__ import annotations
 # the rows an importer would write — patch for bugfix-level changes, minor
 # for behavior changes, major for output-shape changes. This is the version
 # stamped into biblio.publications.source_provenance[*].transform_version.
+# 1.5.1 (2026-09-30): configuration loading gains the PEOPLE_PUBS_SKIP_DOTENV
+# opt-out, which the offline test suite sets; no importer transform changed,
+# so apart from this stamp importers write the same rows.
 # 1.5.0 (2026-09-25): organisation-neutrality correction to ORCID employment
 # matching. It no longer folds one organisation's names and acronyms into a
 # single token, so a configured pattern matches only the forms it lists, plus
@@ -30,4 +33,4 @@ from __future__ import annotations
 # failures as retryable errors instead of completed no-payload lookups.
 # 1.1.0 (2026-07-17): new writer surface added; no importer transform
 # changed, so existing source_provenance stamps are unaffected.
-__version__ = "1.5.0"
+__version__ = "1.5.1"

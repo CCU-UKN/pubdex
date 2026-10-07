@@ -4,97 +4,50 @@
 # Proves that DB/init/ bootstraps the full schema from an EMPTY PostgreSQL
 # database, and that the runtime patch (010_ingestion_runtime_schema.sql) is
 # idempotent: re-applying it to the freshly bootstrapped database must succeed
-# without errors and leave every expected object in place.
+# without errors and leave every expected object in place, the login roles'
+# use of the schema holding the extensions included. A last re-application
+# runs after the maintenance role has been removed from this run's own
+# cluster, as in a database restored elsewhere: it must succeed as well, and
+# must not create the role.
 #
 # Runs entirely inside a disposable Docker container with its own data volume.
-# Both carry a unique per-run name and a run label, no host port is published,
-# and the cleanup registered before anything is created removes only those two
-# resources — even after a failed start or an interrupted run. Existing
-# containers and volumes are never touched: a name collision aborts instead of
-# taking the resource over, and parallel runs do not interfere.
+# Both carry a unique per-run name and a run label, and no host port is
+# published. The cleanup is registered before anything is created and runs on
+# every ordinary exit and after SIGINT, SIGTERM or SIGHUP -- also after a
+# failed start -- ignoring further signals meanwhile. It removes only what
+# carries this run's label and then confirms that nothing is left. SIGKILL
+# skips the cleanup; a failed removal or a daemon that stops answering can
+# leave something behind as well, but then the run says so, prints the
+# commands that find the leftovers, and fails. Existing containers and volumes
+# are never touched: a name collision aborts instead of taking the resource
+# over, and parallel runs do not interfere. The superuser password is random,
+# independent of the printed run id, and reaches Docker through the
+# environment rather than a command line; the container log tail printed after
+# a failed bootstrap has it masked. This lifecycle is shared with the other
+# Docker-backed scripts through lib/disposable_postgres.sh.
 #
 #   ./run_migration_smoke.sh                 # full run (needs Docker)
-#   SMOKE_PG_IMAGE=postgres:16 ./run_migration_smoke.sh
+#   SMOKE_PG_IMAGE=postgres:16@sha256:<digest> ./run_migration_smoke.sh
+#   (DISPOSABLE_PG_IMAGE sets the image of all three Docker-backed scripts at once)
 set -euo pipefail
 cd "$(dirname "$0")"
 
-IMAGE="${SMOKE_PG_IMAGE:-postgres:16}"
+DB_DIR="$PWD"
+IMAGE="${SMOKE_PG_IMAGE:-${DISPOSABLE_PG_IMAGE:-postgres:16}}"
 WAIT_SECONDS="${SMOKE_WAIT_SECONDS:-120}"
-RUN_ID="$(date +%Y%m%d%H%M%S)-$$-$(od -An -N4 -tx4 /dev/urandom | tr -d ' \n')"
-CONTAINER="pubdex-migration-smoke-${RUN_ID}"
-VOLUME="pubdex-migration-smoke-${RUN_ID}"
 LABEL_KEY="pubdex.migration-smoke.run"
-
-# Removes only the container and volume this run created: both must carry this
-# run's label, so a resource that merely shares the name is left alone.
-cleanup() {
-  local rc=$?
-  trap - EXIT
-  if docker container inspect "$CONTAINER" >/dev/null 2>&1 \
-     && [ "$(docker container inspect -f "{{ index .Config.Labels \"$LABEL_KEY\" }}" "$CONTAINER" 2>/dev/null)" = "$RUN_ID" ]; then
-    docker rm -f -v "$CONTAINER" >/dev/null 2>&1 || true
-  fi
-  if docker volume inspect "$VOLUME" >/dev/null 2>&1 \
-     && [ "$(docker volume inspect -f "{{ index .Labels \"$LABEL_KEY\" }}" "$VOLUME" 2>/dev/null)" = "$RUN_ID" ]; then
-    docker volume rm "$VOLUME" >/dev/null 2>&1 || true
-  fi
-  exit "$rc"
-}
-trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
-
-# Never take over a resource that already exists, however unlikely a collision.
-if docker container inspect "$CONTAINER" >/dev/null 2>&1; then
-  echo "ERROR: a container named $CONTAINER already exists; not touching it." >&2
-  exit 1
-fi
-if docker volume inspect "$VOLUME" >/dev/null 2>&1; then
-  echo "ERROR: a volume named $VOLUME already exists; not touching it." >&2
-  exit 1
-fi
+RESOURCE_PREFIX="pubdex-migration-smoke-"
+PASSWORD_PREFIX="smoke"
+# shellcheck source=lib/disposable_postgres.sh
+source "$DB_DIR/lib/disposable_postgres.sh"
+pg_begin_run
 
 echo "[1/4] Starting disposable PostgreSQL ($IMAGE) with DB/init/ mounted (run $RUN_ID)..."
-docker volume create --label "$LABEL_KEY=$RUN_ID" "$VOLUME" >/dev/null
-docker run -d --name "$CONTAINER" --label "$LABEL_KEY=$RUN_ID" \
-  -e POSTGRES_PASSWORD="smoke-$RUN_ID" -e POSTGRES_DB=people_db \
-  -v "$VOLUME:/var/lib/postgresql/data" \
-  -v "$PWD/init:/docker-entrypoint-initdb.d:ro" \
-  "$IMAGE" >/dev/null
+pg_start
 
-# The entrypoint runs the init scripts against a socket-only temporary server
-# and only then starts the real one. Require its completion message, evidence
-# that every init/*.sql was run, and TCP readiness; stop waiting as soon as the
-# container exits (a failed init script stops it).
-echo "[2/4] Waiting for bootstrap ($(ls init/*.sql | xargs -n1 basename | tr '\n' ' ')) to finish, up to ${WAIT_SECONDS}s..."
-bootstrapped() {
-  local logs
-  logs="$(docker logs "$CONTAINER" 2>&1)" || return 1
-  grep -q 'PostgreSQL init process complete' <<<"$logs" || return 1
-  local script
-  for script in init/*.sql; do
-    grep -q "running /docker-entrypoint-initdb.d/$(basename "$script")" <<<"$logs" || return 1
-  done
-  docker exec "$CONTAINER" pg_isready -h 127.0.0.1 -U postgres -d people_db >/dev/null 2>&1
-}
-ready=0
-for i in $(seq "$WAIT_SECONDS"); do
-  if [ "$(docker container inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null)" != "true" ]; then
-    echo "ERROR: the database container stopped during bootstrap; container log tail:" >&2
-    docker logs --tail 40 "$CONTAINER" >&2 || true
-    exit 1
-  fi
-  if bootstrapped; then
-    ready=1
-    break
-  fi
-  sleep 1
-done
-if [ "$ready" -ne 1 ]; then
-  echo "ERROR: database not bootstrapped after ${WAIT_SECONDS}s; container log tail:" >&2
-  docker logs --tail 40 "$CONTAINER" >&2 || true
-  exit 1
-fi
+echo "[2/4] Waiting for bootstrap (${PG_INIT_SCRIPTS[*]}) to finish, up to ${WAIT_SECONDS}s..."
+pg_wait_for_bootstrap
+pg_report_server
 
 check_objects() {
   docker exec -i "$CONTAINER" psql -v ON_ERROR_STOP=1 -q -U postgres -d people_db <<'SQL'
@@ -408,19 +361,83 @@ END $$;
 SQL
 }
 
-echo "[3/4] Verifying expected schema objects after fresh bootstrap..."
+# The login roles may use the schema that holds the extensions -- citext and
+# its operators are found only then -- and may not create objects there;
+# maintenance reaches no application schema. `check_role_grants absent`
+# instead requires that the maintenance role does not exist.
+check_role_grants() {
+  local maintenance=false
+  if [ "$1" = present ]; then maintenance=true; fi
+  docker exec -i "$CONTAINER" psql -v ON_ERROR_STOP=1 -q -U postgres -d people_db \
+    -v maintenance="$maintenance" <<'SQL'
+DO $$
+DECLARE
+  role_name TEXT;
+BEGIN
+  FOREACH role_name IN ARRAY ARRAY['app_readonly', 'app_writer'] LOOP
+    IF NOT has_schema_privilege(role_name, 'public', 'USAGE')
+       OR has_schema_privilege(role_name, 'public', 'CREATE') THEN
+      RAISE EXCEPTION 'schema smoke failed: % needs USAGE but not CREATE on schema public', role_name;
+    END IF;
+  END LOOP;
+END $$;
+\if :maintenance
+DO $$
+BEGIN
+  IF NOT has_schema_privilege('maintenance', 'public', 'USAGE')
+     OR has_schema_privilege('maintenance', 'public', 'CREATE') THEN
+    RAISE EXCEPTION 'schema smoke failed: maintenance needs USAGE but not CREATE on schema public';
+  END IF;
+  IF has_schema_privilege('maintenance', 'app', 'USAGE')
+     OR has_schema_privilege('maintenance', 'biblio', 'USAGE')
+     OR has_schema_privilege('maintenance', 'activity', 'USAGE') THEN
+    RAISE EXCEPTION 'schema smoke failed: maintenance reaches an application schema';
+  END IF;
+END $$;
+\else
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'maintenance') THEN
+    RAISE EXCEPTION 'schema smoke failed: re-applying the runtime patch created the maintenance role';
+  END IF;
+END $$;
+\endif
+SQL
+}
+
+reapply_runtime_patch() {
+  docker exec "$CONTAINER" psql -v ON_ERROR_STOP=1 -q -U postgres -d people_db \
+    -f /docker-entrypoint-initdb.d/010_ingestion_runtime_schema.sql >/dev/null
+}
+
+echo "[3/5] Verifying expected schema objects after fresh bootstrap..."
 check_objects
 check_member_oa_view
+check_role_grants present
 echo "      OK"
 
 seed_legacy_internal_flags
 
-echo "[4/4] Re-applying 010_ingestion_runtime_schema.sql (idempotency)..."
-docker exec "$CONTAINER" psql -v ON_ERROR_STOP=1 -q -U postgres -d people_db \
-  -f /docker-entrypoint-initdb.d/010_ingestion_runtime_schema.sql >/dev/null
+echo "[4/5] Re-applying 010_ingestion_runtime_schema.sql (idempotency)..."
+reapply_runtime_patch
 check_objects
 check_member_oa_view
 check_internal_flag_repair
+check_role_grants present
 echo "      OK — patch re-applied cleanly, all objects still present"
+
+# A database restored into another cluster can lack the maintenance role,
+# which only 000_init.sql creates; the runtime patch has to apply there too,
+# and must not create the role.
+echo "[5/5] Re-applying it once more after removing the maintenance role from this run's cluster..."
+docker exec -i "$CONTAINER" psql -v ON_ERROR_STOP=1 -q -U postgres -d people_db <<'SQL'
+DROP OWNED BY maintenance;
+DROP ROLE maintenance;
+SQL
+reapply_runtime_patch
+check_objects
+check_member_oa_view
+check_role_grants absent
+echo "      OK — patch re-applied without the role, and did not create it"
 
 echo "PASS: schema bootstraps from empty DB and the runtime patch is re-runnable."

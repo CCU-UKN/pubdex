@@ -3,22 +3,30 @@
 #
 # Covers: Python compilation, Markdown link and path consistency, the offline
 # unit and fixture tests, and the transform-version guard when a commit range
-# or the staged index is supplied. It needs no database and no network.
+# or the staged index is supplied. It needs no database and no network -- the
+# tests' network guard refuses connections from the tests and the Python
+# processes they start -- and the tests run in a cleared environment
+# (DB/run_tests.sh): no DSN, PG* setting or PYTEST_ADDOPTS value the caller
+# exports, and nothing in DB/.env, reaches them. A skip that
+# DB/tests/expected_skips.py does not name, or a test module skipped while it
+# is collected, fails the run.
 #
-# Local runs and CI run the same steps: CI checks out the repository, installs
-# the development requirements and calls this script. No check is defined in
-# workflow YAML, so any Git forge can produce the same result.
+# It is the pre-commit hook, and the first stage of run_ci_suite.sh, the
+# complete suite that CI runs. No check is defined in workflow YAML, so any Git
+# forge can produce the same result.
 #
 #   ./run_checks.sh                              # ordinary local run
 #   ./run_checks.sh --staged                     # pre-commit: index vs HEAD
-#   ./run_checks.sh --base <sha> --head <sha>    # CI: a pushed or proposed range
+#   ./run_checks.sh --base <sha> --head <sha>    # a pushed or proposed range
 #
-# This is deliberately NOT the whole verification story. These are separate
-# commands, each needing Docker:
+# This is deliberately NOT the whole verification story. run_ci_suite.sh adds
+# the following stages, each also a command of its own; all but the first
+# need Docker:
 #
-#   DB/run_migration_smoke.sh      schema bootstrap from an empty database
-#   DB/run_task_1a_demo.sh         the clean-clone acceptance path, offline
-#   DB/run_integration_tests.sh    the disposable-database integration suite
+#   check_secrets_and_local_config.py  committed secrets and local configuration
+#   DB/run_migration_smoke.sh          schema bootstrap from an empty database
+#   DB/run_task_1a_demo.sh             the clean-clone acceptance path, offline
+#   DB/run_disposable_integration.sh   the integration suite on a disposable PostgreSQL
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
