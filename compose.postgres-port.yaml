@@ -1,0 +1,16 @@
+# Publishes the stack's PostgreSQL on a host port, for a database client on
+# this machine (psql, pgAdmin); compose.yaml alone publishes none. Use it on
+# every command for that project, together with compose.yaml:
+#
+#   PEOPLE_PUBS_POSTGRES_PORT=5433 \
+#     docker compose -f compose.yaml -f compose.postgres-port.yaml up --wait
+#
+# PEOPLE_PUBS_POSTGRES_PORT is required, so the port is chosen rather than
+# defaulted into another PostgreSQL's. PEOPLE_PUBS_POSTGRES_ADDRESS defaults
+# to 127.0.0.1. The connection is not encrypted and every role logs in with
+# its password, so publish on another address only behind a firewall and
+# with TLS of your own (DEPLOYMENT.md, "Reaching the database").
+services:
+  postgres:
+    ports:
+      - "${PEOPLE_PUBS_POSTGRES_ADDRESS:-127.0.0.1}:${PEOPLE_PUBS_POSTGRES_PORT:?set PEOPLE_PUBS_POSTGRES_PORT to the host port for PostgreSQL}:5432"

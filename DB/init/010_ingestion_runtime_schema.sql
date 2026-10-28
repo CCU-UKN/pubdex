@@ -1438,6 +1438,38 @@ CREATE UNIQUE INDEX IF NOT EXISTS publication_dedup_map_web_pub_id_uq
 COMMENT ON MATERIALIZED VIEW biblio.publication_dedup_map_web IS
   'Read-optimized PubDex snapshot of biblio.publication_dedup_memberships (pub_id -> canonical winner); refresh alongside publications_canon_web.';
 
+-- Refreshing a materialized view takes its owner -- the role that applies
+-- this patch, normally the bootstrap superuser -- and PostgreSQL 16 has no
+-- privilege that hands the refresh to another role. The ingestion role
+-- refreshes the two serving snapshots through this function instead, which
+-- runs as their owner (SECURITY DEFINER) and does exactly what
+-- refresh_publications_canon_web.sql does: it takes the same advisory lock
+-- and refreshes both snapshots in the caller's transaction, so they change
+-- together at its commit. It takes no argument and runs no dynamic SQL.
+-- Every name in it is schema-qualified, and its search_path is pg_catalog
+-- with temporary objects last, the path PostgreSQL 17 itself uses for a
+-- refresh, so no object a caller creates takes part in it. Only app_writer
+-- may execute it: the owner keeps the snapshots, and app_writer still
+-- cannot refresh, alter or drop them directly.
+CREATE OR REPLACE FUNCTION biblio.refresh_serving_snapshots()
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $func$
+BEGIN
+  PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext('biblio.publications_canon_web.refresh'));
+  REFRESH MATERIALIZED VIEW CONCURRENTLY biblio.publication_dedup_map_web;
+  REFRESH MATERIALIZED VIEW CONCURRENTLY biblio.publications_canon_web;
+END;
+$func$;
+
+COMMENT ON FUNCTION biblio.refresh_serving_snapshots() IS
+  'Refreshes biblio.publication_dedup_map_web and biblio.publications_canon_web together, as their owner, under the refresh advisory lock of refresh_publications_canon_web.sql. EXECUTE is granted to app_writer only.';
+
+REVOKE ALL ON FUNCTION biblio.refresh_serving_snapshots() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION biblio.refresh_serving_snapshots() TO app_writer;
+
 -- Publication list with normalized publication date fields (year/month/day precision).
 CREATE OR REPLACE VIEW biblio.publications_with_pub_date AS
 WITH clean AS MATERIALIZED (

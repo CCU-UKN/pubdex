@@ -647,5 +647,5 @@ def test_prerequisites_are_checked_before_anything_is_created(tmp_path: Path) ->
 
     shutil.rmtree(fake.db.parent / ".venv")
     proc = fake.run()
-    assert proc.returncode == 1 and "python3 -m venv .venv" in proc.stderr
+    assert proc.returncode == 1 and "./setup_venv.sh" in proc.stderr
     assert fake.argvs() == [["info"]], "nothing but the daemon probe ever reached Docker"

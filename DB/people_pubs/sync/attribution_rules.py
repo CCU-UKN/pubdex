@@ -68,7 +68,11 @@ Transaction boundaries and coordination:
   same advisory lock as DB/refresh_publications_canon_web.sh, so readers
   switch from the old pair to the new pair atomically. It is a separate
   transaction so the attribution lock is not held for the seconds a snapshot
-  rebuild takes on a large database.
+  rebuild takes on a large database. The refresh runs through
+  `biblio.refresh_serving_snapshots()`, which executes as the snapshots'
+  owner, so the ingestion role app_writer can run every step of this
+  command; a database that predates the function needs the runtime patch
+  DB/init/010_ingestion_runtime_schema.sql re-applied.
 - If the refresh fails, both snapshots keep their previous state and the
   committed rules and flags are consistent; only the served snapshots are
   stale. Re-run `recompute --refresh-only`, or
@@ -129,13 +133,9 @@ TRANSACTION_ATTEMPTS = 3
 LOCK_SQL = "SELECT biblio.institution_attribution_lock(true)"
 RECOMPUTE_SQL = "SELECT biblio.recompute_institution_attribution() AS changed"
 
-# Both run inside one transaction, under the lock shared with
-# DB/refresh_publications_canon_web.sh.
-REFRESH_LOCK_SQL = "SELECT pg_advisory_xact_lock(hashtext('biblio.publications_canon_web.refresh'))"
-REFRESH_SQL = (
-    "REFRESH MATERIALIZED VIEW CONCURRENTLY biblio.publication_dedup_map_web",
-    "REFRESH MATERIALIZED VIEW CONCURRENTLY biblio.publications_canon_web",
-)
+# Refreshes both snapshots in the calling transaction, under the lock shared
+# with DB/refresh_publications_canon_web.sh, as their owner (DB/init/010_...sql).
+REFRESH_SQL = "SELECT biblio.refresh_serving_snapshots()"
 
 
 def check_options(
@@ -319,19 +319,18 @@ def _change_rules_and_recompute(
 def _refresh_snapshots(dsn: Optional[str]) -> None:
     """Transaction 2: refresh both snapshots atomically, map and canon.
 
-    Takes the same advisory lock as DB/refresh_publications_canon_web.sh, so
-    the two never overlap. A failure rolls the whole transaction back: both
-    snapshots keep their previous state, the committed rules and flags stay
-    consistent, and the refresh can simply be retried.
+    biblio.refresh_serving_snapshots() takes the same advisory lock as
+    DB/refresh_publications_canon_web.sh, so the two never overlap. A failure
+    rolls the whole transaction back: both snapshots keep their previous
+    state, the committed rules and flags stay consistent, and the refresh can
+    simply be retried.
     """
     with db_conn(dsn) as conn:
         conn.autocommit = False
         try:
             with conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(REFRESH_LOCK_SQL)
-                for statement in REFRESH_SQL:
-                    LOGGER.info("%s", statement)
-                    cur.execute(statement)
+                LOGGER.info("refreshing biblio.publication_dedup_map_web and biblio.publications_canon_web")
+                cur.execute(REFRESH_SQL)
                 cur.execute(
                     "SELECT count(*) AS publications, max(snapshot_refreshed_at) AS refreshed_at "
                     "FROM biblio.publications_canon_web"

@@ -1,0 +1,39 @@
+# The build context of the Dockerfile next to this file: an allowlist.
+#
+# The first rule excludes everything; the rules after it let in exactly what
+# the image is built from -- the runtime lock, the lock of the pip that
+# installs it, the lock of psycopg-c's build tools and the four scripts that
+# fetch and install them during the build without being copied
+# (DB/fetch_verified.py, DB/install_pip.py, DB/install_locked.py and
+# DB/locked_files.py), the Python modules of the people_pubs package,
+# the three demonstration fixtures with their README, the four files of the
+# schema bootstrap in DB/init/, the two Compose files, create_secrets.sh,
+# set_passwords.sh and the two licences. Nothing else in
+# the checkout reaches the build context or the image, wherever it lies: not
+# .git, environment files or secret files, database data or backups, virtual
+# environments, caches, local notes or any other file in DB/init/. A new file
+# the image needs has to be added here and copied in the Dockerfile
+# explicitly.
+*
+!DB/requirements-pip.txt
+!DB/requirements-build.txt
+!DB/requirements.txt
+!DB/fetch_verified.py
+!DB/install_pip.py
+!DB/install_locked.py
+!DB/locked_files.py
+!DB/people_pubs/**/*.py
+!DB/tests/fixtures/golden/README.md
+!DB/tests/fixtures/golden/demo_roster_minimal.csv
+!DB/tests/fixtures/golden/orcid_work_minimal.json
+!DB/tests/fixtures/golden/crossref_work_minimal.json
+!DB/init/000_init.sql
+!DB/init/010_ingestion_runtime_schema.sql
+!DB/init/011_member_info_manual.sql
+!DB/init/020_role_passwords.sh
+!compose.yaml
+!compose.postgres-port.yaml
+!create_secrets.sh
+!set_passwords.sh
+!LICENSE
+!LICENSE-CC-BY-4.0

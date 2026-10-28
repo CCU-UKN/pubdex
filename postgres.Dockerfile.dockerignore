@@ -1,0 +1,14 @@
+# The build context of postgres.Dockerfile, the PostgreSQL image: an
+# allowlist, which BuildKit reads in place of .dockerignore for that file.
+#
+# The first rule excludes everything; the rules after it let in exactly what
+# the image is built from in the build context -- DB/fetch_verified.py, which
+# downloads PostgreSQL's source and keeps it only when its SHA-256 is the one
+# postgres.Dockerfile fixes, and DB/locked_files.py, which it imports, both
+# mounted for that step without being copied; and the licence of the
+# entrypoint scripts, third_party/docker-library-postgres/LICENSE, which the
+# image carries. Nothing else of the checkout enters the image.
+*
+!DB/fetch_verified.py
+!DB/locked_files.py
+!third_party/docker-library-postgres/LICENSE

@@ -9,6 +9,20 @@ from __future__ import annotations
 # the rows an importer would write — patch for bugfix-level changes, minor
 # for behavior changes, major for output-shape changes. This is the version
 # stamped into biblio.publications.source_provenance[*].transform_version.
+# It is not the release version of PubDex images and releases (VERSION in
+# the repository root).
+# 1.5.3 (2026-10-28): every database connection requires SCRAM
+# authentication and leaves GSSAPI encryption off unless its connection
+# string or libpq's environment chooses otherwise
+# (people_pubs.connection_security); no importer transform changed, so apart
+# from this stamp importers write the same rows.
+# 1.5.2 (2026-10-14): configuration loading reads the database password from
+# the file PEOPLE_DB_PASSWORD_FILE names, and attribution_rules refreshes the
+# serving snapshots through biblio.refresh_serving_snapshots(), so the
+# ingestion role can run it; add_people also reads a roster from standard
+# input (--csv -) and checks a roster's header before it connects
+# (2026-10-19); no importer transform changed, so apart from this stamp
+# importers write the same rows.
 # 1.5.1 (2026-09-30): configuration loading gains the PEOPLE_PUBS_SKIP_DOTENV
 # opt-out, which the offline test suite sets; no importer transform changed,
 # so apart from this stamp importers write the same rows.
@@ -33,4 +47,4 @@ from __future__ import annotations
 # failures as retryable errors instead of completed no-payload lookups.
 # 1.1.0 (2026-07-17): new writer surface added; no importer transform
 # changed, so existing source_provenance stamps are unaffected.
-__version__ = "1.5.1"
+__version__ = "1.5.3"

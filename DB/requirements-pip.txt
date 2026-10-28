@@ -1,0 +1,12 @@
+#
+# The pip that installs requirements.txt in the application image and
+# requirements-dev.txt in CI, at an exact version and with the SHA-256 hashes
+# of its release files on the package index, installed before either lock.
+# Regenerate from DB/ with pip-tools and keep this header in place of the
+# empty line and the comment that pip-compile writes first:
+#   echo 'pip==<version>' | pip-compile --no-header --generate-hashes --allow-unsafe --output-file=requirements-pip.txt -
+#
+pip==26.2.2 \
+    --hash=sha256:3a8e5c800492787f33a4114ef54444546c340df428974ebba17e0fd47e11af2f \
+    --hash=sha256:fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70
+    # via -r -

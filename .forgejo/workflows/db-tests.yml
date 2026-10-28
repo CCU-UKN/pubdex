@@ -1,21 +1,29 @@
 # Forgejo Actions adapter around the repository's complete verification suite,
 # the counterpart of .github/workflows/db-tests.yml. Everything this job
 # verifies lives in run_ci_suite.sh and the tracked scripts it calls: the job
-# checks the repository out with its history, installs DB/requirements-dev.txt
-# into .venv and runs ./run_ci_suite.sh with the event's commit range.
+# checks the repository out with its history, creates .venv with
+# ./setup_venv.sh, and runs ./run_ci_suite.sh with the event's commit range.
 #
 # It needs a Forgejo Runner that has the label below as a host label
 # (pubdex-ci-host:host), so that the job runs directly on a machine meeting
 # the runner contract in DB/TESTING_STRATEGY.md, "Running the suite
-# elsewhere", with python3.11 on PATH and Node.js for the checkout action. A
-# runner that runs jobs in containers does not meet it.
+# elsewhere", with python3.11 on PATH, a C compiler and libpq's headers with
+# pg_config for psycopg's C implementation, and Node.js for the checkout
+# action.
+# Stages 6 and 7 build the application image and start the Compose
+# deployment, so that machine needs Docker Engine 28.0.1 or later, except
+# 28.2.0 to 28.3.2, with the buildx plugin and the Compose plugin 2.24.0 or later
+# (DB/lib/docker_versions.sh), a daemon on the same machine whose socket the
+# job's user may use, and access to the registries and the package index
+# unless Docker has the images and packages already. A runner that runs jobs
+# in containers does not meet it.
 #
 # The checkout action is GitHub's actions/checkout at the commit the GitHub
 # workflow pins, fetched from Forgejo's mirror by absolute URL. No action
 # installs Python, because actions/setup-python downloads its interpreters
 # from GitHub; the runner provides python3.11, and the suite's log records
-# the versions each run used. pip and the packages are pinned as in the
-# GitHub workflow. Forgejo documents `permissions:` as ignored, so none is
+# the versions each run used. pip and the packages are pinned, fetched and
+# installed as in the GitHub workflow. Forgejo documents `permissions:` as ignored, so none is
 # set; the automatic token is not stored in the checkout.
 name: DB tests
 
@@ -35,10 +43,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Install dependencies
-        run: |
-          python3.11 -m venv .venv
-          .venv/bin/python -m pip install pip==26.2.1
-          .venv/bin/python -m pip install -r DB/requirements-dev.txt
+        run: ./setup_venv.sh --python python3.11
       - name: Run the complete verification suite
         # Forgejo runs a pull request's head commit, not a merge commit, so
         # its range starts at the merge base the event names. A push starts

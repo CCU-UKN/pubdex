@@ -357,15 +357,21 @@ CREATE TABLE pii.orcid_payloads (
 -- =========================
 -- Roles & Grants
 -- =========================
+-- The login roles start without a password, so no password written in a
+-- file anybody can read opens a new database. A role without a password
+-- cannot log in with one until it is given its own: from the deployment's
+-- secret files when the Compose deployment initialises its database
+-- (020_role_passwords.sh), or with ./sync_db_role_passwords.sh --apply in the
+-- setup of DB/compose.yaml (DB/README.md, section 2.5).
 DO $$ BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_readonly') THEN
-    CREATE ROLE app_readonly LOGIN PASSWORD 'change-me-ro';
+    CREATE ROLE app_readonly LOGIN PASSWORD NULL;
   END IF;
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_writer') THEN
-    CREATE ROLE app_writer  LOGIN PASSWORD 'change-me-rw';
+    CREATE ROLE app_writer  LOGIN PASSWORD NULL;
   END IF;
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'maintenance') THEN
-    CREATE ROLE maintenance LOGIN PASSWORD 'change-me-admin';
+    CREATE ROLE maintenance LOGIN PASSWORD NULL;
   END IF;
 END $$;
 

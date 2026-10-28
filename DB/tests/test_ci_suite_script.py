@@ -3,7 +3,8 @@
 The real script runs from a scratch copy of the repository layout in which
 every stage is a stub that records its name, arguments and working directory,
 and fails or runs slowly when asked to. Stub `docker` and `git` executables
-stand in for the real ones. This pins, without Docker, the stage order, that
+stand in for the real ones; the stub `docker` reports an Engine and a Compose
+version, so that the version requirements can be checked. This pins, without Docker, the stage order, that
 the first failure stops the run with its own status, how --base/--head reach
 the transform-version guard and the check of the range's commits (the
 all-zero and empty first-push forms included), the prerequisite diagnostics,
@@ -37,6 +38,8 @@ STAGES = {
     "migration": "DB/run_migration_smoke.sh",
     "demo": "DB/run_task_1a_demo.sh",
     "integration": "DB/run_disposable_integration.sh",
+    "stack": "run_stack_acceptance.sh",
+    "operator": "run_operator_acceptance.sh",
 }
 ORDER = list(STAGES)
 
@@ -60,11 +63,23 @@ fi
 exit 0
 '''
 
-STUB_DOCKER = '#!/bin/sh\necho "$*" >> "$STUB_LOG.docker"\n[ "${STUB_DOCKER:-up}" = down ] && exit 1\nexit 0\n'
+STUB_DOCKER = r'''#!/bin/sh
+echo "$*" >> "$STUB_LOG.docker"
+[ "${STUB_DOCKER:-up}" = down ] && exit 1
+case "$*" in
+  "version --format {{.Server.Version}}") echo "${STUB_ENGINE:-29.9.1}" ;;
+  "compose version --short") [ "${STUB_COMPOSE:-5.6.0}" = none ] && exit 1; echo "${STUB_COMPOSE:-5.6.0}" ;;
+esac
+exit 0
+'''
 STUB_GIT = '#!/bin/sh\n[ "${STUB_CHECKOUT:-yes}" = no ] && exit 128\necho true\n'
 # Stands in for .venv/bin/python: answers the requirements probe and runs the
 # stub checker, which is a shell script like the other stages.
-STUB_PYTHON = f'#!{BASH}\nif [ "$1" = -c ]; then exit "${{STUB_IMPORTS_FAIL:-0}}"; fi\nexec {BASH} "$@"\n'
+# -c: the import check and the version report; -m: the pip version report,
+# answered here so that no real program of that name runs; anything else is
+# a stage script, run by Bash.
+STUB_PYTHON = (f'#!{BASH}\nif [ "$1" = -c ]; then exit "${{STUB_IMPORTS_FAIL:-0}}"; fi\n'
+               f'if [ "$1" = -m ]; then echo "stub 0.0"; exit 0; fi\nexec {BASH} "$@"\n')
 
 
 def _executable(path: Path, text: str) -> None:
@@ -80,6 +95,8 @@ class Fake:
         self.root.mkdir()
         self.script = self.root / SUITE.name
         shutil.copy2(SUITE, self.script)
+        (self.root / "DB" / "lib").mkdir(parents=True)
+        shutil.copy2(ROOT / "DB" / "lib" / "docker_versions.sh", self.root / "DB" / "lib")
         for name, relative in STAGES.items():
             _executable(self.root / relative, STUB_STAGE.replace("@NAME@", name))
         self.python = self.root / ".venv" / "bin" / "python"
@@ -142,15 +159,16 @@ def test_stages_run_in_order_from_any_directory(tmp_path: Path) -> None:
     assert fake.names() == ORDER
     assert all(call[1:] == [] for call in fake.calls()), "no stage gets arguments without a range"
     headers = [line for line in proc.stdout.splitlines() if line.startswith("==> Stage ") and "passed" not in line]
-    assert [h.split(":")[0] for h in headers] == [f"==> Stage {n}/5" for n in range(1, 6)]
-    assert "PASS: all 5 stages" in proc.stdout
+    assert [h.split(":")[0] for h in headers] == [f"==> Stage {n}/7" for n in range(1, 8)]
+    assert "PASS: all 7 stages" in proc.stdout
     for context in fake.lines(".context"):
         _name, cwd = context.split("\t")
         assert Path(cwd).resolve() == fake.root.resolve(), "stages run from the repository root"
-    assert fake.lines(".docker") == ["info", "version --format {{.Server.Version}}"], (
-        "the daemon is probed, and its version reported, before any stage"
+    assert fake.lines(".docker") == ["info", "version --format {{.Server.Version}}", "compose version --short"], (
+        "the daemon and the Compose plugin are probed, and their versions reported, before any stage"
     )
     assert "Environment:" in proc.stdout and "  bash    " in proc.stdout
+    assert "  docker  29.9.1" in proc.stdout and "  compose 5.6.0" in proc.stdout
 
 
 @pytest.mark.parametrize("failing", ORDER)
@@ -160,7 +178,7 @@ def test_the_first_failure_stops_the_run_with_its_status(tmp_path: Path, failing
     assert proc.returncode == 7
     position = ORDER.index(failing)
     assert fake.names() == ORDER[: position + 1], "no later stage starts"
-    assert f"stage {position + 1}/5" in proc.stderr and "failed with exit status 7" in proc.stderr
+    assert f"stage {position + 1}/7" in proc.stderr and "failed with exit status 7" in proc.stderr
     assert "later stages were not run" in proc.stderr
     assert "PASS" not in proc.stdout
 
@@ -227,6 +245,47 @@ def test_prerequisite_diagnostics(tmp_path: Path) -> None:
     proc = fake.run(STUB_CHECKOUT="no")
     assert proc.returncode == 1 and "not a Git checkout" in proc.stderr
 
+    # Below 28.0.1 other hosts can reach ports published on loopback, and in
+    # 28.2.0 to 28.3.2 again after a firewalld reload: refused although they
+    # start the stack.
+    for refused in ("24.0.7", "25.0.5", "26.1.5+dfsg1-9+deb13u1", "27.5.1", "28.0.0"):
+        proc = fake.run(STUB_ENGINE=refused)
+        assert proc.returncode == 1 and f"Docker Engine {refused} is too old" in proc.stderr, refused
+        assert "need Docker Engine 28.0.1 or later, except 28.2.0 to 28.3.2" in proc.stderr
+        assert "can let other hosts reach the ports it publishes on 127.0.0.1" in " ".join(proc.stderr.split())
+    for refused in ("28.2.0", "28.3.2"):
+        proc = fake.run(STUB_ENGINE=refused)
+        assert proc.returncode == 1 and "a firewalld reload opens ports published on 127.0.0.1" in proc.stderr
+    assert fake.calls() == [], "no stage runs on an unsupported Engine"
+    # The first supported release, GitHub's ubuntu-24.04 runner, the fix of
+    # CVE-2025-54388 and a current release.
+    for accepted in ("28.0.1", "28.0.4", "28.3.3", "29.9.2"):
+        assert fake.run(STUB_ENGINE=accepted, STUB_FAIL="offline").returncode == 7, accepted
+    fake.log.unlink()
+
+    proc = fake.run(STUB_ENGINE="dev")
+    assert proc.returncode == 1 and "Docker Engine reports the version 'dev'" in proc.stderr
+
+    proc = fake.run(STUB_COMPOSE="none")
+    assert proc.returncode == 1 and "the Docker Compose plugin was not found" in proc.stderr
+    assert "Install the Compose plugin, version 2.24.0 or later" in proc.stderr
+
+    # 2.20.1 and older reject the start_interval of compose.yaml; 2.20.2 to
+    # 2.23.x leave it out of the containers.
+    for old in ("2.19.1", "2.20.0", "2.20.1", "2.20.2", "2.23.3", "2.24.0-rc.1", "v1.29.2"):
+        proc = fake.run(STUB_COMPOSE=old)
+        assert proc.returncode == 1 and f"Docker Compose {old} is too old" in proc.stderr, old
+        assert "stages 6 and 7 need the Compose plugin 2.24.0 or later" in proc.stderr
+        assert "Upgrade the Compose plugin" in proc.stderr
+    for unknown in ("dev", "2.24"):
+        proc = fake.run(STUB_COMPOSE=unknown)
+        assert proc.returncode == 1 and f"reports the version '{unknown}', which is not a release number" in proc.stderr
+    assert fake.calls() == [], "no stage runs while a prerequisite is missing"
+
+    for accepted in ("2.24.0", "v2.24.0", "2.24.6+ds1-0ubuntu1~22.04.1", "2.24.1-rc.1", "v2.39.1", "5.6.0"):
+        assert fake.run(STUB_COMPOSE=accepted, STUB_FAIL="offline").returncode == 7, accepted
+    fake.log.unlink()
+
     tools = _restricted_path(tmp_path, fake.bindir / "git")
     proc = fake.run(PATH=tools)
     assert proc.returncode == 1 and "docker was not found on PATH" in proc.stderr
@@ -236,15 +295,125 @@ def test_prerequisite_diagnostics(tmp_path: Path) -> None:
     proc = fake.run(PATH=tools)
     assert proc.returncode == 1 and "git was not found on PATH" in proc.stderr
 
+    # An existing .venv that lacks packages is created anew: no pip of its own
+    # installs anything.
     proc = fake.run(STUB_IMPORTS_FAIL="1")
     assert proc.returncode == 1 and "lacks the development requirements" in proc.stderr
-    assert "pip install -r DB/requirements-dev.txt" in proc.stderr
+    assert "Remove .venv and create it again with:" in proc.stderr and "./setup_venv.sh" in proc.stderr
+    assert "pip install" not in proc.stderr and "install_pip.py" not in proc.stderr
 
     fake.python.unlink()
     proc = fake.run()
-    assert proc.returncode == 1 and "python3 -m venv .venv" in proc.stderr
+    assert proc.returncode == 1 and "./setup_venv.sh" in proc.stderr
+    assert _hint(proc.stderr) == FRESH_SETUP
 
     assert fake.calls() == [], "no stage runs while a prerequisite is missing"
+
+
+# Every .venv is set up by one command, ./setup_venv.sh: create it without
+# pip, fetch the locked files over HTTPS with DB/fetch_verified.py, install
+# the pip of its own lock from them with DB/install_pip.py, which runs no
+# other pip, then the development lock with DB/install_locked.py, from those
+# files alone -- the files, pip and steps that CI and the image build use.
+# The scripts that need .venv say so when it is missing, and the
+# documentation gives the same command.
+FRESH_SETUP = ["./setup_venv.sh"]
+VENV_HINTS = ["run_checks.sh", "DB/run_task_1a_demo.sh", "DB/run_disposable_integration.sh"]
+SETUP_DOCUMENTS = ["README.md", "QUICKSTART.md", "DB/README.md", "DB/TESTING_STRATEGY.md",
+                   ".github/workflows/db-tests.yml", ".forgejo/workflows/db-tests.yml",
+                   "run_ci_suite.sh", *VENV_HINTS]
+# The records of tasks 1a and 1b keep the commands their results were
+# verified with, before pip had a lock of its own; they are not checked here.
+OTHER_SETUP = re.compile(r"pip install\b|-m venv\b|python\S* \S*(?:install_pip|install_locked|fetch_verified)\.py")
+
+
+def _run_setup_script(tmp_path: Path, *args: str, interpreter: str = "python3.11") -> list:
+    """Runs setup_venv.sh in a scratch checkout whose interpreters only record
+    how they are called, and returns those calls in order, with the
+    checkout's path as <root> and the temporary wheelhouse as <wheelhouse>."""
+    checkout, log = tmp_path / "setup-checkout", tmp_path / "setup-calls.log"
+    checkout.mkdir()
+    shutil.copy2(ROOT / "setup_venv.sh", checkout / "setup_venv.sh")
+    venv_python = tmp_path / "setup-venv-python"
+    _executable(venv_python, f'#!/bin/sh\necho "venv-python $*" >> "{log}"\n')
+    # The interpreter answers the version check, and creates .venv where
+    # -m venv asks.
+    _executable(tmp_path / "setup-bin" / interpreter,
+                f'#!/bin/sh\necho "{interpreter} $*" >> "{log}"\n'
+                f'if [ "$1" = -m ]; then mkdir -p "$4/bin" && cp "{venv_python}" "$4/bin/python"; fi\n')
+    environment = dict(os.environ, PATH=f"{tmp_path / 'setup-bin'}{os.pathsep}{os.environ['PATH']}",
+                       TMPDIR=str(tmp_path))
+    proc = subprocess.run([BASH, str(checkout / "setup_venv.sh"), *args], cwd=tmp_path, env=environment,
+                          capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    calls = log.read_text(encoding="utf-8").replace(str(checkout), "<root>").splitlines()
+    return [re.sub(re.escape(str(tmp_path)) + r"/tmp\.\w+", "<wheelhouse>", call) for call in calls]
+
+
+def test_setup_venv_creates_venv_without_pip_and_installs_only_from_the_verified_files(tmp_path: Path) -> None:
+    calls = _run_setup_script(tmp_path)
+    assert [call for call in calls if " -c " not in call] == [
+        "python3.11 -m venv --without-pip <root>/.venv",
+        "venv-python -I <root>/DB/fetch_verified.py wheels --dest <wheelhouse> --allow-source psycopg-c "
+        "<root>/DB/requirements-pip.txt <root>/DB/requirements-build.txt <root>/DB/requirements-dev.txt",
+        "venv-python <root>/DB/install_pip.py --wheelhouse <wheelhouse> --network-isolation preferred",
+        "venv-python <root>/DB/install_locked.py --wheelhouse <wheelhouse> --psycopg c --network-isolation preferred "
+        "<root>/DB/requirements-dev.txt",
+        "venv-python -I -m pip check",
+    ]
+    assert not list(tmp_path.glob("tmp.*")), "the wheelhouse is removed"
+
+
+def test_setup_venv_passes_its_choices_on_and_refuses_an_existing_venv(tmp_path: Path) -> None:
+    calls = _run_setup_script(tmp_path, "--python", "python3", "--psycopg", "python",
+                              "--network-isolation", "required", interpreter="python3")
+    assert "python3 -m venv --without-pip <root>/.venv" in calls
+    assert any(call.endswith("--wheelhouse <wheelhouse> --network-isolation required") for call in calls)
+    assert any("--psycopg python --network-isolation required" in call for call in calls)
+    again = subprocess.run([BASH, str(tmp_path / "setup-checkout" / "setup_venv.sh"), "--python", "python3"],
+                           env=dict(os.environ, PATH=f"{tmp_path / 'setup-bin'}{os.pathsep}{os.environ['PATH']}"),
+                           capture_output=True, text=True, timeout=60)
+    assert again.returncode == 1 and ".venv exists already" in again.stderr
+    for args in (["--psycopg", "binary"], ["--network-isolation", "none"], ["--bogus"]):
+        usage = subprocess.run([BASH, str(ROOT / "setup_venv.sh"), *args], capture_output=True, text=True, timeout=60)
+        assert usage.returncode == 2 and "usage: setup_venv.sh" in usage.stderr, args
+
+
+def _hint(stderr: str) -> list:
+    """The commands a missing-interpreter message gives: the indented lines
+    after the one that says how to create .venv."""
+    lines = stderr.splitlines()
+    start = next(index for index, line in enumerate(lines) if line.endswith("Create it from the repository root with:"))
+    commands = []
+    for line in lines[start + 1:]:
+        if not line.startswith("  "):
+            break
+        commands.append(line.strip())
+    return commands
+
+
+@pytest.mark.parametrize("relative", VENV_HINTS)
+def test_each_script_that_needs_the_venv_says_how_to_create_it_with_the_pinned_pip(
+    tmp_path: Path, relative: str,
+) -> None:
+    # The script alone in a checkout without .venv: each looks for the
+    # interpreter before it reads anything else of the checkout.
+    script = tmp_path / "checkout" / relative
+    script.parent.mkdir(parents=True)
+    shutil.copy2(ROOT / relative, script)
+    proc = subprocess.run([BASH, str(script)], cwd=tmp_path, capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 1 and "no interpreter at .venv/bin/python" in proc.stderr, proc.stderr
+    assert _hint(proc.stderr) == FRESH_SETUP
+
+
+@pytest.mark.parametrize("relative", SETUP_DOCUMENTS)
+def test_every_setup_is_setup_venv_and_no_other_pip_or_download(relative: str) -> None:
+    # No setup creates .venv, runs pip or fetches anything but through
+    # setup_venv.sh: so no pip from ensurepip, no pip that downloads, and no
+    # source build but psycopg-c's. Commands in prose count as well.
+    text = (ROOT / relative).read_text(encoding="utf-8")
+    assert "setup_venv.sh" in text, f"{relative} gives no setup command"
+    assert OTHER_SETUP.findall(text) == [], relative
 
 
 def test_an_interrupt_from_the_terminal_stops_the_running_stage_and_the_suite(tmp_path: Path) -> None:
@@ -319,23 +488,20 @@ def test_the_gitlab_example_installs_the_requirements_and_hands_the_suite_its_ra
 ) -> None:
     block, commands = _gitlab_example()
     assert 'GIT_DEPTH: "0"' in block, "the commit-range checks need the complete history"
-    # A checkout whose suite and interpreters only record how they are called.
+    # A checkout whose setup and suite only record how they are called;
+    # setup_venv.sh's own steps are tested above.
     checkout, log = tmp_path / "checkout", tmp_path / "calls.log"
     _executable(checkout / "run_ci_suite.sh", f'#!/bin/sh\necho "suite $*" >> "{log}"\n')
-    venv_python = tmp_path / "venv-python"
-    _executable(venv_python, f'#!/bin/sh\necho "venv-python $*" >> "{log}"\n')
-    _executable(tmp_path / "bin" / "python3.11",
-                f'#!/bin/sh\necho "python3.11 $*" >> "{log}"\nmkdir -p .venv/bin && cp "{venv_python}" .venv/bin/python\n')
+    _executable(checkout / "setup_venv.sh", f'#!/bin/sh\necho "setup $*" >> "{log}"\n')
     environment = {key: value for key, value in os.environ.items() if not key.startswith("CI_")}
-    environment.update(variables, CI_COMMIT_SHA=HEAD_SHA, PATH=f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}")
+    environment.update(variables, CI_COMMIT_SHA=HEAD_SHA)
     # As a shell executor runs them: Bash, stopping at the first failure.
     job = "set -eo pipefail\n" + "\n".join(commands) + "\n"
     proc = subprocess.run([BASH, "-c", job], cwd=checkout, env=environment, capture_output=True, text=True,
                           timeout=60)
     assert proc.returncode == 0, proc.stderr
     assert log.read_text(encoding="utf-8").splitlines() == [
-        "python3.11 -m venv .venv",
-        "venv-python -m pip install -r DB/requirements-dev.txt",
+        "setup --python python3.11",
         f"suite --base {base} --head {HEAD_SHA}",
     ]
 
@@ -345,21 +511,22 @@ def test_public_ci_is_only_an_adapter_around_the_suite() -> None:
     code = [line.split("#", 1)[0] for line in workflow.splitlines()]
     steps = "\n".join(code)
     assert './run_ci_suite.sh --base "$BASE" --head "$HEAD"' in steps
-    assert "pip install -r DB/requirements-dev.txt" in steps
-    for forbidden in ("pytest", "docker", "psql", "postgres", "services:", "secrets.",
-                      "run_checks.sh", "run_integration_tests", "run_migration_smoke", "run_task_1a_demo"):
+    assert "./setup_venv.sh --python python" in steps
+    for forbidden in ("pytest", "docker", "psql", "postgres", "services:", "secrets.", "pip install", "-m venv",
+                      "install_pip", "install_locked", "fetch_verified",
+                      "run_checks.sh", "run_integration_tests", "run_migration_smoke", "run_task_1a_demo",
+                      "run_stack_acceptance", "build_image", "create_secrets"):
         assert forbidden not in steps, f"{forbidden!r} belongs in a tracked script, not in the workflow"
     assert "contents: read" in steps
     assert "fetch-depth: 0" in steps
     assert "persist-credentials: false" in steps
     assert "timeout-minutes:" in steps
     # Inputs that would otherwise move are fixed: actions by commit, a runner
-    # image release, exact Python and pip versions.
+    # image release, an exact Python version, and pip from its hashed lock.
     uses = [line.split("uses:", 1)[1].strip() for line in code if "uses:" in line]
     assert uses and all(re.fullmatch(r"[\w./-]+@[0-9a-f]{40}", action) for action in uses), uses
     assert "runs-on: ubuntu-latest" not in steps and re.search(r"runs-on: ubuntu-\d\d\.\d\d", steps)
     assert re.search(r'python-version: "3\.11\.\d+"', steps)
-    assert re.search(r"pip install pip==\d+\.\d+(\.\d+)?\n", steps)
 
 
 # The CI adapters: forge -> (its workflow, the context names its expressions
@@ -441,23 +608,19 @@ def test_each_ci_adapter_installs_the_requirements_and_hands_the_suite_its_event
     context, base, head = EVENT_RANGES[(forge, event)]
     expressions, commands = _adapter_job(workflow)
     variables = {name: _evaluate(expression, dict.fromkeys(names, context)) for name, expression in expressions.items()}
-    # A checkout whose suite and interpreters only record how they are called.
+    # A checkout whose setup and suite only record how they are called;
+    # setup_venv.sh's own steps are tested above.
     checkout, log = tmp_path / "checkout", tmp_path / "calls.log"
     _executable(checkout / "run_ci_suite.sh", f'#!/bin/sh\necho "suite $*" >> "{log}"\n')
-    venv_python = tmp_path / "venv-python"
-    _executable(venv_python, f'#!/bin/sh\necho "venv-python $*" >> "{log}"\n')
-    _executable(tmp_path / "bin" / interpreter,
-                f'#!/bin/sh\necho "{interpreter} $*" >> "{log}"\nmkdir -p .venv/bin && cp "{venv_python}" .venv/bin/python\n')
+    _executable(checkout / "setup_venv.sh", f'#!/bin/sh\necho "setup $*" >> "{log}"\n')
     environment = {key: value for key, value in os.environ.items() if key not in variables}
-    environment.update(variables, PATH=f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}")
+    environment.update(variables)
     # As both runners execute run steps: Bash, stopping at the first failure.
     proc = subprocess.run([BASH, "-e", "-c", "\n".join(commands) + "\n"], cwd=checkout, env=environment,
                           capture_output=True, text=True, timeout=60)
     assert proc.returncode == 0, proc.stderr
     calls = log.read_text(encoding="utf-8").splitlines()
-    assert calls[0] == f"{interpreter} -m venv .venv"
-    assert re.fullmatch(r"venv-python -m pip install pip==\d+\.\d+(\.\d+)?", calls[1])
-    assert calls[2:] == ["venv-python -m pip install -r DB/requirements-dev.txt", f"suite --base {base} --head {head}"]
+    assert calls == [f"setup --python {interpreter}", f"suite --base {base} --head {head}"]
 
 
 def test_the_forgejo_adapter_runs_on_a_host_runner_with_forgejo_hosted_actions() -> None:
@@ -465,9 +628,11 @@ def test_the_forgejo_adapter_runs_on_a_host_runner_with_forgejo_hosted_actions()
     code = "\n".join(line.split("#", 1)[0] for line in forgejo.splitlines())
     # The same thin adapter as on GitHub ...
     assert './run_ci_suite.sh --base "$BASE" --head "$HEAD"' in code
-    assert "pip install -r DB/requirements-dev.txt" in code
-    for forbidden in ("pytest", "docker", "psql", "postgres", "services:", "secrets.",
-                      "run_checks.sh", "run_integration_tests", "run_migration_smoke", "run_task_1a_demo"):
+    assert "./setup_venv.sh --python python3.11" in code
+    for forbidden in ("pytest", "docker", "psql", "postgres", "services:", "secrets.", "pip install", "-m venv",
+                      "install_pip", "install_locked", "fetch_verified",
+                      "run_checks.sh", "run_integration_tests", "run_migration_smoke", "run_task_1a_demo",
+                      "run_stack_acceptance", "build_image", "create_secrets"):
         assert forbidden not in code, f"{forbidden!r} belongs in a tracked script, not in the workflow"
     assert "fetch-depth: 0" in code and "persist-credentials: false" in code and "timeout-minutes:" in code
     # ... for a runner that runs the job on its host, under the label the
@@ -479,11 +644,11 @@ def test_the_forgejo_adapter_runs_on_a_host_runner_with_forgejo_hosted_actions()
     uses = re.findall(r"uses: (\S+)", code)
     assert uses and all(re.fullmatch(r"https://data\.forgejo\.org/[\w.-]+/[\w.-]+@[0-9a-f]{40}", u) for u in uses), uses
     assert "setup-python" not in code and "github.com" not in code
-    # Both forges run the same checkout code and the same pip.
+    # Both forges run the same checkout code and the same setup, from the locks.
     def pins(text: str) -> tuple:
         checkout = re.search(r"checkout@([0-9a-f]{40})", text)
-        pip = re.search(r"pip install pip==(\S+)\n", text)
-        assert checkout and pip, "each adapter pins the checkout commit and pip"
-        return checkout.group(1), pip.group(1)
+        setup = re.search(r"run: (\./setup_venv\.sh) --python \S+\n", text)
+        assert checkout and setup, "each adapter pins the checkout commit and sets up with setup_venv.sh"
+        return checkout.group(1), setup.group(1)
 
     assert pins(github) == pins(forgejo)

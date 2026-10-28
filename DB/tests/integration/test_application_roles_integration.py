@@ -26,7 +26,11 @@ permission model DB/init/ sets up, granting nothing themselves:
   app_readonly; SELECT, INSERT, UPDATE and DELETE on the tables of app,
   biblio and activity to app_writer, and on the tables of pii to maintenance,
   which gets no application schema; and USAGE, but not CREATE, on the schema
-  that holds the extensions.
+  that holds the extensions;
+- app_writer refreshes the two serving snapshots through
+  biblio.refresh_serving_snapshots(), which runs as their owner with a fixed
+  search_path, and may neither refresh, alter nor drop them directly; no
+  other role may execute the function.
 
 ./run_disposable_integration.sh runs this module again after re-applying the
 runtime patch, which re-creates views and re-issues grants.
@@ -332,3 +336,65 @@ def test_every_application_relation_grants_each_role_its_privileges() -> None:
     }
     assert {t["name"] for t in pii_tables} >= {"people_pii", "orcid_emails", "publication_author_emails"}
     assert [t["name"] for t in pii_tables if not t["maintenance_dml"]] == []
+
+
+SNAPSHOTS = ("biblio.publication_dedup_map_web", "biblio.publications_canon_web")
+REFRESH_FUNCTION = "biblio.refresh_serving_snapshots()"
+
+
+def _refresh_as_owner() -> None:
+    with psycopg.connect(_dsn(), autocommit=True) as conn:
+        conn.execute(f"SELECT {REFRESH_FUNCTION}")
+
+
+def test_app_writer_refreshes_the_serving_snapshots_through_their_function_only(created: dict) -> None:
+    slug = uuid4().hex[:12]
+    with psycopg.connect(_dsn(), row_factory=dict_row, autocommit=True) as conn:
+        pub_id = upsert_publication(conn, {"doi": f"10.5555/refresh-{slug}", "title": f"Refresh title {slug}",
+                                           "raw_crossref_json": {"DOI": f"10.5555/refresh-{slug}"}})
+        created["pub_ids"].append(pub_id)
+    try:
+        with connected_as("app_writer") as conn:
+            mapped = "SELECT count(*) AS n FROM biblio.publication_dedup_map_web WHERE pub_id = %s"
+            assert conn.execute(mapped, (pub_id,)).fetchone()["n"] == 0, "not in the snapshot before a refresh"
+            # A temporary object named like a snapshot takes no part.
+            conn.execute("CREATE TEMPORARY TABLE publication_dedup_map_web (pub_id bigint)")
+            with conn.transaction():
+                conn.execute(f"SELECT {REFRESH_FUNCTION}")
+            assert conn.execute(mapped, (pub_id,)).fetchone()["n"] == 1, "the refresh took the new publication in"
+
+            for snapshot in SNAPSHOTS:
+                assert _refused(conn, f"REFRESH MATERIALIZED VIEW CONCURRENTLY {snapshot}")
+                assert _refused(conn, f"REFRESH MATERIALIZED VIEW {snapshot}")
+                assert _refused(conn, f"ALTER MATERIALIZED VIEW {snapshot} SET (fillfactor = 90)")
+                assert _refused(conn, f"DROP MATERIALIZED VIEW {snapshot}")
+        for role in ("app_readonly", "maintenance"):
+            with connected_as(role) as conn:
+                assert _refused(conn, f"SELECT {REFRESH_FUNCTION}"), role
+    finally:
+        _refresh_as_owner()  # leaves no snapshot row of a publication the cleanup deletes
+
+
+def test_the_refresh_function_runs_as_the_snapshots_owner_with_a_fixed_path() -> None:
+    with psycopg.connect(_dsn(), row_factory=dict_row, autocommit=True) as conn:
+        function = conn.execute(
+            """
+            SELECT p.prosecdef AS definer, p.proconfig AS config, pg_get_userbyid(p.proowner) AS owner,
+                   array(SELECT DISTINCT CASE a.grantee WHEN 0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END
+                         FROM aclexplode(p.proacl) a WHERE a.privilege_type = 'EXECUTE'
+                         ORDER BY 1) AS executors
+            FROM pg_proc p
+            WHERE p.oid = 'biblio.refresh_serving_snapshots()'::regprocedure
+            """
+        ).fetchone()
+        owners = {
+            row["owner"]
+            for row in conn.execute(
+                "SELECT pg_get_userbyid(relowner) AS owner FROM pg_class WHERE oid = ANY(%s::regclass[])",
+                (list(SNAPSHOTS),),
+            ).fetchall()
+        }
+    assert function["definer"] is True
+    assert function["config"] == ["search_path=pg_catalog, pg_temp"]
+    assert owners == {function["owner"]}, "the function runs as the owner of both snapshots"
+    assert sorted(function["executors"]) == sorted({function["owner"], "app_writer"})

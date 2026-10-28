@@ -2,10 +2,21 @@
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, NoReturn, Optional
+
+from people_pubs.password_file import PasswordFileError, read_password_file
+
+#: Names a file holding the database password of the ingestion commands --
+#: in the Compose deployment, app_writer's secret file. It takes the place of
+#: PGPASSWORD, so libpq's password reaches no command line, and it gives the
+#: password to every connection of the process and of the commands it starts.
+PASSWORD_FILE_VARIABLE = "PEOPLE_DB_PASSWORD_FILE"
+#: Exit status of a configuration error, as for the read service.
+CONFIGURATION_ERROR = 2
 
 
 def _parse_dotenv(path: Path) -> Dict[str, str]:
@@ -45,9 +56,15 @@ def dotenv_disabled() -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _configuration_error(message: str) -> NoReturn:
+    print(f"people_pubs: configuration error: {message}", file=sys.stderr)
+    raise SystemExit(CONFIGURATION_ERROR)
+
+
 def _load_local_env(candidates: Optional[List[Path]] = None) -> None:
     # Prefer real process env; .env only fills missing values, and not at all
     # when PEOPLE_PUBS_SKIP_DOTENV is set.
+    password_in_environment = "PGPASSWORD" in os.environ
     if candidates is None:
         candidates = [
             Path(__file__).resolve().parents[1] / ".env",  # .../DB/.env
@@ -63,7 +80,23 @@ def _load_local_env(candidates: Optional[List[Path]] = None) -> None:
         os.environ["PGDATABASE"] = str(os.getenv("POSTGRES_DB"))
     if "PGUSER" not in os.environ and os.getenv("POSTGRES_USER"):
         os.environ["PGUSER"] = str(os.getenv("POSTGRES_USER"))
-    if "PGPASSWORD" not in os.environ:
+    # A password file takes precedence over any password a .env file would
+    # fill in. A different PGPASSWORD in the environment makes the choice
+    # ambiguous; the same one is what a command started by another that read
+    # the file inherits. Errors name the variable, never the file or a value.
+    password_path = os.environ.get(PASSWORD_FILE_VARIABLE, "").strip()
+    if password_path:
+        try:
+            password = read_password_file(password_path, PASSWORD_FILE_VARIABLE)
+        except PasswordFileError as exc:
+            _configuration_error(str(exc))
+        if password_in_environment and os.environ.get("PGPASSWORD") != password:
+            _configuration_error(
+                f"{PASSWORD_FILE_VARIABLE} and PGPASSWORD are both set, to different passwords; "
+                "set only one of them"
+            )
+        os.environ["PGPASSWORD"] = password
+    elif "PGPASSWORD" not in os.environ:
         role_password_vars = {
             "app_readonly": "APP_READONLY_PASSWORD",
             "app_writer": "APP_WRITER_PASSWORD",

@@ -6,6 +6,28 @@ their purpose, and a minimal example.
 Notes:
 - Run from `DB/` or set `PYTHONPATH=DB` when using `python -m ...`.
 - DB connection uses `PEOPLE_DB_DSN` or `PG*` env vars unless `--dsn` is provided.
+- The server has to authenticate every connection by SCRAM, and GSSAPI
+  encryption is not negotiated (`require_auth=scram-sha-256`,
+  `gssencmode=disable`). A server that asks for
+  a cleartext or MD5 password, for GSSAPI or for no authentication at all is
+  refused with `authentication method requirement "scram-sha-256" failed`,
+  before any password is sent. To use such a server on purpose, set
+  `require_auth` in `--dsn` or `PEOPLE_DB_DSN`, or `PGREQUIREAUTH` in the
+  environment or `DB/.env` — `PGREQUIREAUTH=none`, for example, for a local
+  socket with peer authentication; a value set there is kept, and so is one
+  for `gssencmode` or `PGGSSENCMODE`. A connection service file cannot
+  loosen it.
+- `PEOPLE_DB_PASSWORD_FILE` names a file holding the password instead of
+  `PGPASSWORD` (one line; one trailing line break is removed); it takes
+  precedence over a password `DB/.env` would fill in, and a different
+  `PGPASSWORD` set at the same time is a configuration error (status 2). The
+  command then sets `PGPASSWORD` from the file within its own process, so
+  that its connections, and those of the commands it starts, use it. The
+  Compose deployment gives the ingestion commands their password this way.
+- In the Compose deployment of the repository root, the `people_pubs.sync`
+  commands run in the application image:
+  `docker compose run --rm ingest python -m people_pubs.sync.<command> ...`
+  (`../DEPLOYMENT.md`, "Ingestion").
 
 ### PubDex canonical web snapshot
 
@@ -58,10 +80,135 @@ MAILTO=ops@example.org
   - `MAINTENANCE_PASSWORD`
 - `--check` verifies that the env values currently work.
 - `--apply` runs `ALTER ROLE` for any of those variables that are set, then verifies login.
+- A new database's roles have no password until `--apply` gives them theirs
+  (`init/000_init.sql` creates them without one).
 - Examples:
 ```
 ./sync_db_role_passwords.sh --check
 ./sync_db_role_passwords.sh --apply
+```
+
+### Role passwords of the Compose deployment
+`DB/init/020_role_passwords.sh`
+- Runs once, when the PostgreSQL image initialises an empty volume, after the
+  SQL files; the Compose deployment runs the copy its application image
+  carries, which its `bootstrap` service puts in place. With `PEOPLE_PUBS_APP_READONLY_PASSWORD_FILE` and
+  `PEOPLE_PUBS_APP_WRITER_PASSWORD_FILE` set, as `compose.yaml` sets them, it
+  gives `app_readonly` and `app_writer` the passwords of those secret files
+  and takes the login away from `maintenance`; with neither set it changes
+  nothing.
+- The password reaches the server only as a SCRAM verifier that psql computes
+  (`\password`), never as SQL text, a command-line argument or output. Files
+  are checked first: one line, UTF-8, at most 4096 bytes, the two roles with
+  different passwords, neither the superuser's.
+- `--stdin` sets the passwords of `postgres`, `app_readonly` and
+  `app_writer` on a running server from its standard input, one line
+  `<role><TAB><password>` each, checked as the files are, and then has to
+  open a new TCP connection as each role that the server authenticated by
+  that password (`SYSTEM_USER` `scram-sha-256`). It reads no file: a running
+  container keeps seeing a file that was replaced on the host in its old
+  version. `../set_passwords.sh` calls it with the host's files
+  (`../DEPLOYMENT.md`, "Changing a password").
+
+### Compose deployment: secret files and image
+`create_secrets.sh`, `set_passwords.sh`, `build_image.sh` (repository root)
+- `./create_secrets.sh` creates the deployment's three password files with
+  random passwords, in `secrets/` (mode 700; files 444) or the directory
+  `PEOPLE_PUBS_SECRETS_DIR` names. It never overwrites a file, prints no
+  password, and on a rerun only adds what is missing and checks what is there;
+  `--check` creates nothing and only checks.
+- `./set_passwords.sh` gives the database roles of the running stack the
+  passwords their files hold now, after an operator changed a file, in place
+  or by replacement. It checks the files, that PostgreSQL runs, and that new
+  containers of the read service and of ingestion read the host's bytes,
+  before it sends the passwords to `020_role_passwords.sh --stdin`; any
+  options go to `docker compose` (`-p`, `-f`, `--env-file`). Then restart the
+  read service: `docker compose restart api`, `docker compose up --wait`
+  (`../DEPLOYMENT.md`, "Changing a password").
+- `./build_image.sh` builds the deployment's two images from the checkout:
+  the application image, as `pubdex:local` or the `--tag` given, and the
+  PostgreSQL image, PostgreSQL built from its verified source without
+  SQL/XML, as `pubdex-postgres:local` or the `--postgres-tag` given; both
+  labelled with the release version (`VERSION`), the source revision
+  (`<commit>-dirty` for a working tree with changes) and the build time, the
+  application image also with the transform version. It refuses the release
+  version as tag for a modified working tree. Details: `../DEPLOYMENT.md`,
+  "The application image" and "The PostgreSQL image".
+- With `PEOPLE_PUBS_IMAGE=pubdex:local` and
+  `PEOPLE_PUBS_POSTGRES_IMAGE=pubdex-postgres:local` in `.env`, they are the
+  one-time preparation of a clone; `docker compose up --wait` then starts the stack,
+  and creates no secret file and builds no image itself. A published image
+  replaces the build and the clone: the image carries `compose.yaml` and both
+  scripts (`../DEPLOYMENT.md`, "Setting up").
+```
+./create_secrets.sh                              # once
+./build_image.sh                                 # once
+echo 'PEOPLE_PUBS_IMAGE=pubdex:local' >> .env    # once
+echo 'PEOPLE_PUBS_POSTGRES_IMAGE=pubdex-postgres:local' >> .env    # once
+docker compose up --wait                         # the one command that starts the stack
+```
+
+### Compose deployment: acceptance test
+`run_stack_acceptance.sh` (repository root)
+- Starts `compose.yaml` in a Compose project of its own
+  (`pubdex-acceptance-<run id>`), with the images built from the checkout or
+  those `--image <reference>` and `--postgres-image <reference>` name (pulled
+  first with `--pull`; never built or replaced), runs the synthetic demonstration inside it as
+  `app_writer`, reads the publication over HTTP as `app_readonly`, and checks
+  readiness across a database restart, persistence across recreation and
+  `down`/`up`, and that no password occurs in its output. `--expect-version
+  <version>` and `--expect-revision <commit>` require exactly those labels
+  of a given image. It starts `compose.yaml` alone in a project directory of
+  its own and checks that the stack mounts nothing but its volumes and the
+  secret files; it prints the image's identity and whether the image carries
+  that `compose.yaml`. `--release` verifies a release: it requires the image
+  to carry exactly that version and commit, and starts the `compose.yaml`
+  the image carries, which has to name that version; the PostgreSQL image's
+  labels have to be the same, and SQL/XML has to be unavailable in its
+  server.
+- Its project, secret files and run label are its own; it refuses to start
+  when any of them exists already, ignores `.env`, `compose.override.yaml` and
+  `COMPOSE_*` settings, and afterwards removes exactly what it created,
+  confirming it. Stage 6 of `../run_ci_suite.sh`; details:
+  `../DEPLOYMENT.md`, "Checking a deployment", and `TESTING_STRATEGY.md`.
+```
+./run_stack_acceptance.sh
+./run_stack_acceptance.sh --release --pull --image ghcr.io/ccu-ukn/pubdex:<version>@sha256:<digest> \
+  --postgres-image ghcr.io/ccu-ukn/pubdex-postgres:<version>@sha256:<postgres digest> \
+  --expect-version <version> --expect-revision <commit>   # in any clone: it starts the image's compose.yaml
+```
+
+### Compose deployment: the operator's workflow
+`run_operator_acceptance.sh` (repository root)
+- Runs the procedures of `../DEPLOYMENT.md` as written, in a Compose project
+  of its own (`pubdex-operator-<run id>`) with the images built from the
+  checkout or those `--image <reference>` and `--postgres-image <reference>`
+  name (never built or pulled):
+  a copy of `compose.yaml`, `create_secrets.sh` and `set_passwords.sh`, and
+  nothing else of the checkout — the schema comes from the image — configured by an
+  `.env` file — project name, image, a relative secrets directory, a port
+  and the log level — on the ordinary network; a synthetic roster of mode
+  `0600` imported on standard input with `add_people --csv -
+  --no-orcid-lookup`; an attribution rule, the bundled ORCID and Crossref
+  payloads through `fixture_demo`, the refresh, `GET /v0/publications` and
+  the export; the three passwords changed with `set_passwords.sh`, the files
+  overwritten in place and then replaced by rename, without a restart of
+  PostgreSQL; a dump restored into a new stack after `docker compose down
+  --volumes` (`../DEPLOYMENT.md`, "Backup and restore"); and the role model
+  of `../DEPLOYMENT.md`, "Roles and personal data", on the restored
+  database. Each step is checked by what it leaves: the database's records,
+  the served and exported row, new connections accepted with the new
+  passwords and refused with the old, a refusal that changed nothing, the
+  same counts and publication after the restore.
+- It contacts no metadata provider, refuses to start when its project
+  exists already, keeps every password and roster entry out of its output,
+  and afterwards removes exactly what it created, confirming it. Stage 7 of
+  `../run_ci_suite.sh`; details: `../DEPLOYMENT.md`, "Checking a deployment",
+  and `TESTING_STRATEGY.md`.
+```
+./run_operator_acceptance.sh
+./run_operator_acceptance.sh --image ghcr.io/ccu-ukn/pubdex:<version> \
+  --postgres-image ghcr.io/ccu-ukn/pubdex-postgres:<version>   # in a clone at its commit
 ```
 
 ### Stateful refresh runner (DB-backed staleness)
@@ -277,7 +424,11 @@ Transaction boundaries and coordination with ingestion:
   back to their previous state; the committed rules and flags stay consistent
   and only the served snapshots are stale — retry with
   `recompute --refresh-only` or `./refresh_publications_canon_web.sh`.
-  Refreshing is idempotent.
+  Refreshing is idempotent. It runs through `biblio.refresh_serving_snapshots()`,
+  which executes as the snapshots' owner and which `app_writer` alone may
+  call, so the whole command works as the ingestion role; a database that
+  predates the function needs `init/010_ingestion_runtime_schema.sql`
+  re-applied (`README.md` §3.2).
 - `--dry-run` runs transaction 1 and rolls it back: nothing is written and no
   snapshot is refreshed. `--no-refresh` commits transaction 1 and skips
   transaction 2 on purpose.
@@ -755,7 +906,16 @@ python -m people_pubs.sync.add_people \
   --employment-role-title "Postdoc"
 
 python -m people_pubs.sync.add_people --csv people.csv --person-kind internal --debug
+
+# The roster on standard input, from a file the importer's user need not be able to read
+python -m people_pubs.sync.add_people --csv - < people.csv
 ```
+
+`--csv -` reads the roster from standard input (a file named `-` is `./-`)
+and refuses a terminal there. In the Compose deployment this is how a private
+roster reaches the container: `docker compose run --rm -T ingest python -m
+people_pubs.sync.add_people --csv - < roster.csv` ([`DEPLOYMENT.md`](../DEPLOYMENT.md),
+*Importing a roster*).
 
 #### Roster CSV columns
 Only `orcid` is required. Recognized columns:
@@ -772,12 +932,14 @@ Only `orcid` is required. Recognized columns:
 A safe synthetic demo roster lives at `DB/tests/fixtures/golden/demo_roster_minimal.csv`.
 
 #### Validation and error behavior
-- **Missing ORCID** — row rejected: `skipped_invalid` + `WARNING Skipping invalid row: Missing or invalid ORCID`; the run continues.
+- **The roster as a whole** — UTF-8 text, a byte-order mark allowed, whose first line is the header. An empty roster, one without an `orcid` column (a roster without its header row among them) or one that is not UTF-8 stops the run before it connects to the database; a line the CSV reader cannot read stops it with that line's number before the run's single commit, so nothing is written. A file that cannot be opened is reported with the reason, and `permission denied` with the standard-input alternative.
+- **Missing ORCID** — row rejected: `skipped_invalid` + `WARNING Skipping invalid row 3: Missing or invalid ORCID`, numbering the data rows from 1 and never quoting the row; the run continues.
 - **Malformed ORCID** (wrong shape, e.g. `not-an-orcid` or too few digits) — same as missing. A *format-valid* iD with a wrong ISO 7064 check digit — i.e. a mistyped iD that would otherwise become a durable identity key — is likewise rejected (`ORCID checksum invalid`; added 2026-07-10, closing the caveat previously documented here).
 - **Duplicate ORCID** (vs. the DB or an earlier row in the same file) — skipped with `INFO Skipping existing ORCID ... (person_id=...)` and counted as `skipped_existing`; with `--update-existing` the existing person is updated instead. `ON CONFLICT DO NOTHING` guards on `app.identities_orcid` and `app.person_keys` back this at the DB level, so re-imports never duplicate people (idempotent).
 - **Duplicate local member ID** — not applicable by design: the roster carries no institution-supplied ID column. ORCID is the required stable roster key (its duplicate handling is above), and `app.people.person_id` — assigned by the database at import — is the local member ID afterwards. `person_id` is **not** stable across a rebuild from CSV; anything external that needs a durable member reference should key on ORCID. If an institutional ID (LDAP uid, HR number) is ever adopted, it goes into `app.person_keys` as a new `key_type` — never as an email, and never as a new column on `app.people`.
 - **Database errors on a row** — `errors` + `logging.exception`, then a rollback to a per-record savepoint (2026-07-10; previously a full `conn.rollback()` that also discarded rows inserted earlier in the same run while their counters survived into the summary). Only the failing record's writes are discarded; earlier and later rows commit normally at the end of the run, and the stats summary counts exactly what was persisted. Re-imports stay idempotent, so re-running after fixing the cause adds just the failed rows (covered by `tests/integration/test_add_people_partial_failure.py`).
 - End of run logs a stats summary: `total / inserted / updated / skipped_existing / skipped_invalid / errors`.
+- The importer's own messages name people by ORCID iD and `person_id` only; `--dry-run`, which shows what would be written, also prints names, email addresses and employment.
 
 ### Export canonical publications (CSV; read-only)
 `DB/people_pubs/sync/export_publications.py`
@@ -789,6 +951,28 @@ A safe synthetic demo roster lives at `DB/tests/fixtures/golden/demo_roster_mini
 ```
 python -m people_pubs.sync.export_publications --output publications.csv
 python -m people_pubs.sync.export_publications > publications.csv   # stdout works too
+```
+
+### Read service (preliminary HTTP API; read-only)
+`DB/people_pubs/api/`
+- `python -m people_pubs.api` serves the canonical list from the snapshot
+  `biblio.publications_canon_web`: `GET /v0/publications` (bounded pages with
+  the export's columns, `limit` 1–100, `after` a `pub_id`), plus `GET /livez`
+  (process) and `GET /readyz` (database and snapshot usable). Everything under
+  `/v0/` is preliminary, with no compatibility promise.
+- Read-only by construction: no write path, read-only sessions, normally as
+  `app_readonly`. It is configured by `PEOPLE_PUBS_API_*` variables only, the
+  password from a file; it never reads `DB/.env` or the `PG*` variables and
+  makes no metadata-provider request.
+- Settings, response format, errors and an example run: `README.md` §11.
+- `python -m people_pubs.api.probe` is its health check in a container: it
+  asks the service on the same host for `/readyz` (`--live`: `/livez`) and
+  exits with 0 on 200, with 1 and one line saying why otherwise.
+- Example (from `DB/`, with the password in a file only you can read):
+```
+PEOPLE_PUBS_API_DSN="host=127.0.0.1 dbname=people_db user=app_readonly" \
+PEOPLE_PUBS_API_DB_PASSWORD_FILE="$HOME/.people_pubs_api_password" \
+  ../.venv/bin/python -m people_pubs.api
 ```
 
 ### Source coverage report (CSV; read-only)

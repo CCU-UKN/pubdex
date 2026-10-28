@@ -24,6 +24,17 @@ Examples:
 
   python -m people_pubs.sync.add_people --csv people.csv --person-kind internal --debug
 
+  # The roster on standard input: the file never has to be readable by the
+  # user the importer runs as, such as a container's.
+  python -m people_pubs.sync.add_people --csv - < people.csv
+
+The roster is UTF-8 text (a byte-order mark is allowed) whose first line is
+the header. An empty roster, one without an orcid column, or one that cannot
+be read as UTF-8 CSV stops the run and nothing is written. The importer's own
+messages identify people by ORCID iD and person_id and rows by number; only
+--dry-run, which shows what would be written, prints names, email addresses
+and employment.
+
 CSV columns:
   - orcid (required)
   - display_name, first_name, last_name
@@ -43,12 +54,14 @@ CSV columns:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import csv
+import io
 import logging
-import os
 import re
+import sys
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, TextIO
 
 import psycopg
 from psycopg.rows import dict_row
@@ -64,6 +77,11 @@ from people_pubs.utils.identifiers import normalize_orcid, orcid_checksum_is_val
 
 
 _VALID_PERSON_KINDS = {"internal", "external"}
+_STDIN = "-"
+
+
+class RosterError(ValueError):
+    """A roster that cannot be read as a whole: the run stops and writes nothing."""
 
 
 @dataclass
@@ -85,7 +103,7 @@ def _normalize_person_kind(value: Optional[str], default: str) -> str:
         return default
     v = str(value).strip().lower()
     if v not in _VALID_PERSON_KINDS:
-        raise ValueError(f"Invalid person_kind {value!r}; expected internal|external")
+        raise ValueError("Invalid person_kind; expected internal|external or blank")
     return v
 
 
@@ -428,9 +446,70 @@ def _update_person(
 
 def _iter_csv_records(path: str, delimiter: str) -> Iterable[Dict[str, Any]]:
     with open(path, "r", encoding="utf-8-sig", newline="") as f:
-        reader = csv.DictReader(f, delimiter=delimiter)
-        for row in reader:
-            yield row
+        yield from _roster_records(f, delimiter, f"the roster {path}")
+
+
+@contextlib.contextmanager
+def _roster_errors(source: str, reader: csv.DictReader) -> Iterator[None]:
+    # Neither message quotes the roster.
+    try:
+        yield
+    except UnicodeDecodeError:
+        raise RosterError(f"{source} is not UTF-8 text; save it as UTF-8 (a byte-order mark is allowed)") from None
+    except csv.Error as exc:
+        # The csv reader's own count: DictReader's lags behind a failed row.
+        raise RosterError(f"{source}, line {reader.reader.line_num}: {exc}") from None
+
+
+def _roster_rows(reader: csv.DictReader, source: str) -> Iterator[Dict[str, Any]]:
+    with _roster_errors(source, reader):
+        yield from reader
+
+
+def _roster_records(stream: TextIO, delimiter: str, source: str) -> Iterator[Dict[str, Any]]:
+    """The rows of a roster, after its header has been read and checked.
+
+    The header is read at once, so a roster that is empty, has no orcid
+    column or is not UTF-8 text stops the run before a database connection;
+    a row that cannot be read later raises RosterError from the iteration.
+    """
+    try:
+        reader = csv.DictReader(stream, delimiter=delimiter)
+    except TypeError as exc:
+        raise RosterError(f"--delimiter: {exc}") from None
+    with _roster_errors(source, reader):
+        header = reader.fieldnames
+    if not header:
+        raise RosterError(f"{source} is empty; its first line has to be the header, with an orcid column")
+    if "orcid" not in header:
+        raise RosterError(f"{source} has no orcid column; its first line has to be the header, with an orcid column")
+    return _roster_rows(reader, source)
+
+
+def _open_roster(stack: contextlib.ExitStack, path: str, delimiter: str) -> Iterator[Dict[str, Any]]:
+    """The records of the roster at path, or on standard input for "-"."""
+    if path == _STDIN:
+        if sys.stdin is None or sys.stdin.isatty():
+            raise RosterError(
+                "--csv - reads the roster from standard input, which is not redirected here; "
+                "redirect the file to it: --csv - < roster.csv (with docker compose run, add -T)"
+            )
+        stream = io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8-sig", newline="")
+        # Leaves the process's standard input open when the run ends.
+        stack.callback(stream.detach)
+        return _roster_records(stream, delimiter, "the roster on standard input")
+    try:
+        stream = stack.enter_context(open(path, "r", encoding="utf-8-sig", newline=""))
+    except FileNotFoundError:
+        raise RosterError(f"CSV not found: {path}") from None
+    except PermissionError:
+        raise RosterError(
+            f"cannot read the roster {path}: permission denied. Give a roster this user may not "
+            "read on standard input instead: --csv - < roster.csv"
+        ) from None
+    except OSError as exc:
+        raise RosterError(f"cannot read the roster {path}: {exc.strerror}") from None
+    return _roster_records(stream, delimiter, f"the roster {path}")
 
 
 def _ensure_person(
@@ -517,12 +596,7 @@ def _ensure_person(
             orcid,
             dry_run=dry_run,
         )
-        logging.info(
-            "Added person_id=%s orcid=%s display_name=%r",
-            person_id,
-            orcid,
-            record.get("display_name"),
-        )
+        logging.info("Added person_id=%s orcid=%s", person_id, orcid)
         stats.inserted += 1
     except Exception:
         stats.errors += 1
@@ -547,12 +621,12 @@ def run_add_people(
     ctx = OrcidClient() if lookup_orcid and not dry_run else None
     if ctx is None:
         with db_conn(dsn) as conn:
-            for raw in records:
+            for number, raw in enumerate(records, start=1):
                 try:
                     record = _prepare_record(raw, default_person_kind)
                 except Exception as exc:
                     stats.skipped_invalid += 1
-                    logging.warning("Skipping invalid row: %s (row=%r)", exc, raw)
+                    logging.warning("Skipping invalid row %s: %s", number, exc)
                     continue
                 _ensure_person(
                     conn,
@@ -568,12 +642,12 @@ def run_add_people(
         return stats
 
     with db_conn(dsn) as conn, ctx as oc:
-        for raw in records:
+        for number, raw in enumerate(records, start=1):
             try:
                 record = _prepare_record(raw, default_person_kind)
             except Exception as exc:
                 stats.skipped_invalid += 1
-                logging.warning("Skipping invalid row: %s (row=%r)", exc, raw)
+                logging.warning("Skipping invalid row %s: %s", number, exc)
                 continue
             _ensure_person(
                 conn,
@@ -601,7 +675,13 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
             "Example: postgresql://postgres:<password>@127.0.0.1:5432/people_db"
         ),
     )
-    ap.add_argument("--csv", help="Path to CSV with people (requires an orcid column).")
+    ap.add_argument(
+        "--csv",
+        help=(
+            "Path to CSV with people (requires an orcid column); '-' reads it from standard input "
+            "(a file named '-' is ./-)."
+        ),
+    )
     ap.add_argument(
         "--delimiter",
         default=",",
@@ -693,40 +773,46 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     if args.csv and args.orcid:
         raise SystemExit("Use either --csv or --orcid (not both).")
 
-    if args.csv:
-        if not os.path.exists(args.csv):
-            raise SystemExit(f"CSV not found: {args.csv}")
-        records = _iter_csv_records(args.csv, args.delimiter)
-    else:
-        if not args.orcid:
-            raise SystemExit("Missing --orcid for single-person insert.")
-        records = [
-            {
-                "orcid": args.orcid,
-                "display_name": args.display_name,
-                "first_name": args.first_name,
-                "last_name": args.last_name,
-                "person_kind": args.person_kind,
-                "primary_email": args.primary_email,
-                "emails": args.email,
-                "employment_org_name": args.employment_org_name,
-                "employment_department": args.employment_department,
-                "employment_role_title": args.employment_role_title,
-                "employment_start_date": args.employment_start_date,
-                "employment_end_date": args.employment_end_date,
-                "employment_is_current": args.employment_is_current,
-                "employment_source": args.employment_source,
-            }
-        ]
+    with contextlib.ExitStack() as stack:
+        if args.csv:
+            try:
+                records = _open_roster(stack, args.csv, args.delimiter)
+            except RosterError as exc:
+                raise SystemExit(str(exc)) from None
+        else:
+            if not args.orcid:
+                raise SystemExit("Missing --orcid for single-person insert.")
+            records = [
+                {
+                    "orcid": args.orcid,
+                    "display_name": args.display_name,
+                    "first_name": args.first_name,
+                    "last_name": args.last_name,
+                    "person_kind": args.person_kind,
+                    "primary_email": args.primary_email,
+                    "emails": args.email,
+                    "employment_org_name": args.employment_org_name,
+                    "employment_department": args.employment_department,
+                    "employment_role_title": args.employment_role_title,
+                    "employment_start_date": args.employment_start_date,
+                    "employment_end_date": args.employment_end_date,
+                    "employment_is_current": args.employment_is_current,
+                    "employment_source": args.employment_source,
+                }
+            ]
 
-    stats = run_add_people(
-        dsn=args.dsn,
-        records=records,
-        default_person_kind=args.person_kind,
-        update_existing=args.update_existing,
-        dry_run=args.dry_run,
-        lookup_orcid=not args.no_orcid_lookup,
-    )
+        try:
+            stats = run_add_people(
+                dsn=args.dsn,
+                records=records,
+                default_person_kind=args.person_kind,
+                update_existing=args.update_existing,
+                dry_run=args.dry_run,
+                lookup_orcid=not args.no_orcid_lookup,
+            )
+        except RosterError as exc:
+            # Raised before the run's single commit: nothing was written.
+            raise SystemExit(f"{exc}; nothing was written") from None
 
     logging.info(
         "add_people: total=%s inserted=%s updated=%s skipped_existing=%s skipped_invalid=%s errors=%s",

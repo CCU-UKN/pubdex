@@ -1,0 +1,49 @@
+# Test-only additions to compose.yaml, used by run_stack_acceptance.sh
+# together with it; never part of a deployment.
+#
+# It changes no image, command, environment, secret, port, volume mount or
+# health check of compose.yaml, so the acceptance run starts the deployment
+# as it is. It adds two things:
+#
+#   - the run's ownership label on every container, network and volume the
+#     project creates, so that the run's cleanup finds exactly its own
+#     resources, also when Compose itself cannot;
+#   - the network boundary of the test: the project's default network, on
+#     which PostgreSQL and every ingestion container run, is internal, with
+#     no route off the host, so the demonstration cannot reach a metadata
+#     provider and has to succeed from the bundled fixtures. The read service
+#     is attached to one more, ordinary network as well, because Docker
+#     publishes no port of a container that is on internal networks only.
+#
+# compose.yaml itself keeps the ordinary default network, so ingestion that
+# an operator runs in a deployment can reach the providers.
+x-run-label: &run-label
+  pubdex.stack-acceptance.run: ${PEOPLE_PUBS_ACCEPTANCE_RUN:?set by run_stack_acceptance.sh}
+
+services:
+  bootstrap:
+    labels: *run-label
+  postgres:
+    labels: *run-label
+  api:
+    labels: *run-label
+    networks:
+      - default
+      - published
+  ingest:
+    labels: *run-label
+  demo:
+    labels: *run-label
+
+networks:
+  default:
+    internal: true
+    labels: *run-label
+  published:
+    labels: *run-label
+
+volumes:
+  postgres-data:
+    labels: *run-label
+  initdb:
+    labels: *run-label

@@ -129,8 +129,11 @@ installation of your own.
 
 To say it plainly: **task 1a demonstrates read access through the PostgreSQL
 interface. The versioned network API is planned for task 3a** under the agreed
-plan, and is deliberately not part of this result. Nothing in this repository
-claims to serve one, and no command here starts a network endpoint.
+plan, and is deliberately not part of this result. In the task-1a baseline
+(tag `public-baseline-1a`) nothing claimed to serve one, and no command started
+a network endpoint. The preliminary read service added to the repository later,
+for task 2a and recorded in [`CHANGELOG.md`](CHANGELOG.md), is not part of
+this result and does not change what it delivered.
 
 ## Verification commands
 

@@ -9,8 +9,15 @@ without any private data:
 4. querying the resulting baseline;
 5. producing an export.
 
-Commands assume Linux/macOS with Docker (with the compose plugin),
-Python 3.11+, and git.
+Commands assume Linux with Docker (with the compose plugin),
+Python 3.11+, and git; they have been run on Linux only, and macOS and
+Windows are untested.
+
+This walkthrough uses the development setup, `DB/compose.yaml` with the
+Python package on your host. The canonical way to run PubDex is the
+deployment of [`DEPLOYMENT.md`](DEPLOYMENT.md), whose `docker compose run
+--rm demo` runs this walkthrough's demonstration — steps 4, 5 and 7 — inside
+its stack.
 
 ## The whole sequence in one command
 
@@ -18,8 +25,7 @@ Everything the walkthrough below does by hand also runs as a single
 reproducible command:
 
 ```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install -r DB/requirements-dev.txt
+./setup_venv.sh
 ./DB/run_task_1a_demo.sh
 ```
 
@@ -102,9 +108,16 @@ database (disposable container, auto-removed):
 One virtualenv at the repo root serves ingestion and DB tests:
 
 ```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install -r DB/requirements-dev.txt
+./setup_venv.sh
 ```
+
+It creates `.venv` without pip, downloads the locked files over HTTPS and
+checks each against its hash, then installs pip and the development lock
+from those files alone; psycopg's C implementation is built against your
+system's libpq, which needs a C compiler and libpq's headers (`libpq-dev`).
+Without them, `./setup_venv.sh --psycopg python` installs psycopg's
+pure-Python implementation, which loads the system's libpq (16 or later)
+at run time.
 
 Run the default offline check suite once now — it needs no database and no
 network:
@@ -175,9 +188,11 @@ optional extra.
 ## 6. Query what landed
 
 The baseline query interface is the documented PostgreSQL schema and its read
-views: there is no HTTP service to start at this stage, so the queries below
-are plain SQL. (A versioned network API is planned as a later funded result;
-see [`TASK_1A.md`](TASK_1A.md).) `docker exec` runs `psql` inside the
+views, so the queries below are plain SQL. The canonical list of step 7 can
+also be read over HTTP from the preliminary read service,
+`python -m people_pubs.api` ([`DB/README.md`](DB/README.md), section 11); the
+versioned network API is planned as a later funded result (see
+[`TASK_1A.md`](TASK_1A.md)). `docker exec` runs `psql` inside the
 container, which needs no password from the host.
 
 The publications now linked to the fictional demo researcher, with the sources
@@ -351,11 +366,17 @@ pre-commit and CI modes (`--staged`, or `--base`/`--head`) it additionally runs
 the transform-version guard. `run_ci_suite.sh` runs the whole verification
 story in one command, exactly as public CI does: that offline suite, the check
 for committed secrets and local configuration, the migration smoke, the
-acceptance demonstration and the integration suite, each Docker-backed stage on
-a disposable PostgreSQL of its own. Every stage also runs on its own, for
-example `(cd DB && ./run_migration_smoke.sh)`, `./DB/run_task_1a_demo.sh` or
-`./DB/run_disposable_integration.sh`, and `(cd DB && ./run_tests.sh)` still
-runs the unit tests alone.
+acceptance demonstration and the integration suite, each on a disposable
+PostgreSQL of its own, and last the acceptance test of the container
+deployment, which builds the image and starts the stack of
+[`DEPLOYMENT.md`](DEPLOYMENT.md) in a Compose project of its own, and the
+test of the operator's workflow on that stack; they need the Docker Compose
+plugin. None of them touches the database of this
+walkthrough. Every stage also runs on its own, for example
+`(cd DB && ./run_migration_smoke.sh)`, `./DB/run_task_1a_demo.sh`,
+`./DB/run_disposable_integration.sh`, `./run_stack_acceptance.sh` or
+`./run_operator_acceptance.sh`, and
+`(cd DB && ./run_tests.sh)` still runs the unit tests alone.
 
 ## Troubleshooting
 
@@ -370,6 +391,11 @@ runs the unit tests alone.
   baked into the data volume when it is created. Either export the original
   password or wipe the volume (`docker compose down -v` — destroys data) and
   re-boot.
+- **`authentication method requirement "scram-sha-256" failed`** — the
+  server asked for an MD5 or cleartext password, for GSSAPI, or for no
+  authentication at all; ingestion accepts only SCRAM unless told otherwise.
+  The database of `DB/compose.yaml` authenticates connections from the host
+  by SCRAM; for another server, see `DB/SCRIPTS.md`, *Notes*.
 - **Ingestion says `Missing or invalid ORCID` / skips rows** — expected
   validation behavior; see `DB/SCRIPTS.md` → *Add people → Validation and
   error behavior*.

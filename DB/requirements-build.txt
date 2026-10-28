@@ -1,0 +1,24 @@
+#
+# The build tools of psycopg-c, psycopg's C implementation, which
+# DB/install_locked.py builds from its source archive (requirements.txt) in a
+# temporary environment of its own, without build isolation: exactly what
+# psycopg-c 3.3.6's pyproject.toml requires -- setuptools == 83.0.0, pinned
+# there, and wheel >= 0.37 -- with wheel's own requirement, each at an exact
+# version and with the SHA-256 hashes of its release files on the package
+# index, installed from binary wheels only. packaging is at the version
+# requirements-dev.txt locks, as both are fetched into one wheelhouse. None
+# of them is installed where PubDex runs. Update with psycopg-c, from PyPI's
+# records of each release, and keep this header.
+#
+packaging==25.0 \
+    --hash=sha256:29572ef2b1f17581046b3a2227d5c611fb25ec70ca1ba8554b24b0e69331a484 \
+    --hash=sha256:d443872c98d677bf60f6a1f2f8c1cb748e8fe762d2bf9d3148b5599295b0fc4f
+    # via wheel
+setuptools==83.0.0 \
+    --hash=sha256:025bccbbf0fa05b6192bc64ae1e7b16e001fd6d6d4d5de03c97b1c1ade523bef \
+    --hash=sha256:29b23c360f22f414dc7336bb39178cc7bcbf6021ed2733cde173f09dba19abb3
+    # via psycopg-c (build-system requires)
+wheel==0.48.0 \
+    --hash=sha256:3217dcc807155e45db462d7ef2431f5ddda0d7273b700d05a67b271ceb1287ab \
+    --hash=sha256:94800765601e9171bf5d58d066e640662842bcedcbab982b2c90787a2c987322
+    # via psycopg-c (build-system requires)

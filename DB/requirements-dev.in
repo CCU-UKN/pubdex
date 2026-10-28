@@ -1,4 +1,5 @@
-# DB-local development and test dependencies.
-httpx[http2]==0.28.1
-psycopg[binary]==3.2.12
+# DB-local development and test dependencies: the runtime set at the versions
+# requirements.txt locks, plus the test tools.
+-c requirements.txt
+-r requirements.in
 pytest==9.0.3

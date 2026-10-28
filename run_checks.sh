@@ -27,6 +27,8 @@
 #   DB/run_migration_smoke.sh          schema bootstrap from an empty database
 #   DB/run_task_1a_demo.sh             the clean-clone acceptance path, offline
 #   DB/run_disposable_integration.sh   the integration suite on a disposable PostgreSQL
+#   run_stack_acceptance.sh            the Compose deployment, started and checked end to end
+#   run_operator_acceptance.sh         the operator's workflow on that deployment
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -95,7 +97,7 @@ PYTHON="$ROOT/.venv/bin/python"
 if [ ! -x "$PYTHON" ]; then
   echo "run_checks.sh: no interpreter at .venv/bin/python" >&2
   echo "Create it from the repository root with:" >&2
-  echo "  python3 -m venv .venv && .venv/bin/python -m pip install -r DB/requirements-dev.txt" >&2
+  echo "  ./setup_venv.sh" >&2
   exit 1
 fi
 

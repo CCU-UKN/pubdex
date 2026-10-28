@@ -47,7 +47,7 @@ PYTHON="$ROOT/.venv/bin/python"
 if [ ! -x "$PYTHON" ]; then
   echo "ERROR: no interpreter at .venv/bin/python" >&2
   echo "Create it from the repository root with:" >&2
-  echo "  python3 -m venv .venv && .venv/bin/python -m pip install -r DB/requirements-dev.txt" >&2
+  echo "  ./setup_venv.sh" >&2
   exit 1
 fi
 

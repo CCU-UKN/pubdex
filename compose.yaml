@@ -1,0 +1,234 @@
+# PubDex and PostgreSQL in one Compose project: the read service and its
+# database, plus the ingestion commands on request, from two images of the
+# release: the application image, and the PostgreSQL image, PostgreSQL built
+# from its verified source without XML support (postgres.Dockerfile). This
+# file and those images are the whole deployment: the application image
+# carries the database schema, and nothing is read from a checkout of the
+# repository. DEPLOYMENT.md describes setup, settings and operation.
+#
+# Once, before the first start (DEPLOYMENT.md, "Setting up"): the three
+# password files in secrets/ next to this file, which create_secrets.sh
+# creates. Then one command pulls the images Docker does not have yet -- the
+# application image and the PostgreSQL image of the release named below, or
+# those PEOPLE_PUBS_IMAGE and PEOPLE_PUBS_POSTGRES_IMAGE name -- and starts
+# the stack, waiting until it is healthy:
+#   docker compose up --wait
+# Images built from a checkout with build_image.sh, pubdex:local and
+# pubdex-postgres:local, are selected with PEOPLE_PUBS_IMAGE=pubdex:local and
+# PEOPLE_PUBS_POSTGRES_IMAGE=pubdex-postgres:local and used as Docker has them.
+#
+# On every start the one-shot service bootstrap copies the schema bootstrap
+# the image carries -- the files of DB/init/ -- into a volume of its own. On an
+# empty database volume PostgreSQL runs those files and gives the application
+# roles their passwords from the secret files; on a volume with data it does
+# neither, so a restart, a new container or another image changes no schema,
+# data or password. set_passwords.sh changes the passwords later, after a
+# secret file changed. `docker compose down` stops and removes the containers
+# and keeps the database; only `docker compose down --volumes` deletes it.
+#
+# Portable defaults: no fixed container, network or volume name -- every
+# resource belongs to the Compose project, named after this directory unless
+# -p or COMPOSE_PROJECT_NAME names it -- the read service published on
+# loopback only, and PostgreSQL on no host port (compose.postgres-port.yaml
+# publishes it on request). It shares nothing with the setup in
+# DB/compose.yaml, which has fixed names of its own. These defaults do not
+# extend the deployment beyond the platforms DEPLOYMENT.md supports
+# ("Supported platforms"): Linux on x86_64, with the Docker Engine and
+# Compose releases it names, running a linux/amd64 image.
+#
+# Settings, all optional, from the environment or a .env file next to this
+# file (DEPLOYMENT.md, "Settings"):
+#   PEOPLE_PUBS_IMAGE            the application image (ghcr.io/ccu-ukn/pubdex:0.1.0,
+#                                the release of this file), pulled only when
+#                                Docker does not have it; <name>:<tag>@sha256:<digest>
+#                                pins the release's image exactly
+#   PEOPLE_PUBS_POSTGRES_IMAGE   the PostgreSQL image (ghcr.io/ccu-ukn/pubdex-postgres:0.1.0,
+#                                the release of this file), pulled and pinned
+#                                the same way
+#   PEOPLE_PUBS_HTTP_ADDRESS     host address the read service is published on (127.0.0.1)
+#   PEOPLE_PUBS_HTTP_PORT        its host port (8000)
+#   PEOPLE_PUBS_SECRETS_DIR      directory of the secret files (./secrets)
+#   PEOPLE_PUBS_API_LOG_LEVEL    the read service's log level (INFO)
+#   PEOPLE_PUBS_CROSSREF_MAILTO  contact address for Crossref, for ingestion
+#   PEOPLE_PUBS_ORG_PATTERNS     employers that count as yours, for ingestion
+
+# What every container of the application image shares: the image -- pulled
+# only when Docker does not have it, so that a tag moved in the registry later
+# does not replace the image in use at the next start -- an init process that
+# passes signals on and reaps child processes, a read-only root file system
+# with a private /tmp, and no capabilities.
+x-application-image: &application-image
+  image: ${PEOPLE_PUBS_IMAGE:-ghcr.io/ccu-ukn/pubdex:0.1.0}
+  pull_policy: missing
+  init: true
+  read_only: true
+  tmpfs:
+    - /tmp
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+
+# The read service and ingestion: also a database that is ready.
+x-application: &application
+  <<: *application-image
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+# One-shot ingestion as app_writer, with that role's password file and no
+# other credential.
+x-ingestion: &ingestion
+  <<: *application
+  restart: "no"
+  environment:
+    PGHOST: postgres
+    PGPORT: "5432"
+    PGDATABASE: people_db
+    PGUSER: app_writer
+    PEOPLE_DB_PASSWORD_FILE: /run/secrets/app_writer_password
+    PEOPLE_PUBS_CROSSREF_MAILTO: ${PEOPLE_PUBS_CROSSREF_MAILTO:-}
+    PEOPLE_PUBS_ORG_PATTERNS: ${PEOPLE_PUBS_ORG_PATTERNS:-}
+  secrets:
+    - app_writer_password
+
+services:
+  # Makes the volume initdb hold exactly the schema bootstrap of the image --
+  # /opt/pubdex/init, the files of DB/init/ -- and exits; PostgreSQL starts
+  # once it has succeeded. It runs on every start, so the volume always holds
+  # the files of the image in use. No network and no secret.
+  bootstrap:
+    <<: *application-image
+    command: ["python", "-m", "people_pubs.bootstrap", "/var/lib/pubdex/initdb"]
+    restart: "no"
+    network_mode: none
+    volumes:
+      - initdb:/var/lib/pubdex/initdb
+
+  # PostgreSQL 16 from the PostgreSQL image of the release, which keeps the
+  # entrypoint, data directory, socket and environment of the official
+  # postgres image that earlier releases ran (postgres.Dockerfile), so the
+  # settings, volume and health check below are unchanged.
+  postgres:
+    image: ${PEOPLE_PUBS_POSTGRES_IMAGE:-ghcr.io/ccu-ukn/pubdex-postgres:0.1.0}
+    pull_policy: missing
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: people_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      # Read by 020_role_passwords.sh of the schema bootstrap on the first
+      # start, which runs in this container before the server accepts TCP
+      # connections. Nothing reads them later: set_passwords.sh takes changed
+      # passwords from the host's files, because after a file is replaced a
+      # running container still sees the old one.
+      PEOPLE_PUBS_APP_READONLY_PASSWORD_FILE: /run/secrets/app_readonly_password
+      PEOPLE_PUBS_APP_WRITER_PASSWORD_FILE: /run/secrets/app_writer_password
+    secrets:
+      - postgres_password
+      - app_readonly_password
+      - app_writer_password
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      # The schema bootstrap as the bootstrap service left it, read-only. With
+      # nocopy, creating this container leaves the new, empty volume as it is;
+      # otherwise Docker would give it the owner of this image's directory,
+      # root, and the bootstrap service, uid 10001, could not fill it.
+      - type: volume
+        source: initdb
+        target: /docker-entrypoint-initdb.d
+        read_only: true
+        volume:
+          nocopy: true
+    # Room for parallel queries: Docker's default /dev/shm holds 64 MB.
+    shm_size: 256mb
+    # Time for a clean shutdown rather than crash recovery at the next start.
+    stop_grace_period: 60s
+    healthcheck:
+      # Healthy means the server answers on TCP -- during the first start's
+      # initialisation it listens on its socket only -- and both application
+      # roles have SCRAM passwords, which 020_role_passwords.sh sets
+      # last in that initialisation. A first start that failed part-way,
+      # which a restart does not repeat, therefore never becomes healthy, and
+      # nothing that needs the database starts.
+      test:
+        - CMD-SHELL
+        - >-
+          pg_isready -q -h 127.0.0.1 -p 5432 -U postgres -d people_db &&
+          [ "$$(psql -XqtA -U postgres -d people_db -c "SELECT count(*) FROM pg_catalog.pg_authid
+          WHERE rolname IN ('app_readonly', 'app_writer') AND rolcanlogin
+          AND rolpassword LIKE 'SCRAM-SHA-256$$%'")" = 2 ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+      start_interval: 2s
+
+  # The read service, as app_readonly, with that role's password file only.
+  api:
+    <<: *application
+    command: ["python", "-m", "people_pubs.api"]
+    restart: unless-stopped
+    environment:
+      PEOPLE_PUBS_API_DSN: host=postgres port=5432 dbname=people_db user=app_readonly
+      PEOPLE_PUBS_API_DB_PASSWORD_FILE: /run/secrets/app_readonly_password
+      PEOPLE_PUBS_API_LOG_LEVEL: ${PEOPLE_PUBS_API_LOG_LEVEL:-INFO}
+    secrets:
+      - app_readonly_password
+    ports:
+      - "${PEOPLE_PUBS_HTTP_ADDRESS:-127.0.0.1}:${PEOPLE_PUBS_HTTP_PORT:-8000}:8000"
+    healthcheck:
+      # Ready: a database connection in time and the snapshot readable.
+      test: ["CMD", "python", "-m", "people_pubs.api.probe"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+      start_interval: 2s
+
+  # docker compose run --rm ingest python -m people_pubs.sync.<command> [arguments]
+  # Not started by `up`; without a command it only says how to use it.
+  ingest:
+    <<: *ingestion
+    profiles:
+      - ingest
+    command:
+      - python
+      - -c
+      - "import sys; sys.exit('usage: docker compose run --rm ingest python -m people_pubs.sync.<command> [arguments] (DEPLOYMENT.md, \"Ingestion\")')"
+
+  # docker compose run --rm demo: the synthetic demonstration, for a stack you
+  # use to try PubDex out. It imports the bundled roster, ingests the bundled
+  # ORCID and Crossref payloads -- no metadata-provider request -- and adds
+  # the fictional institute of those payloads to the attribution rules, so the
+  # demonstration publication reaches GET /v0/publications. Never part of
+  # `up`, and it writes synthetic records: do not run it on a database you keep.
+  demo:
+    <<: *ingestion
+    profiles:
+      - demo
+    command:
+      - sh
+      - -c
+      - >-
+        python -m people_pubs.sync.add_people --csv tests/fixtures/golden/demo_roster_minimal.csv --no-orcid-lookup &&
+        python -m people_pubs.sync.fixture_demo &&
+        python -m people_pubs.sync.attribution_rules add --affiliation "Synthetic Institute for Collective Behaviour"
+
+# Bind mounts of the host files, owner and mode unchanged; not encrypted.
+secrets:
+  postgres_password:
+    file: ${PEOPLE_PUBS_SECRETS_DIR:-./secrets}/postgres_password
+  app_readonly_password:
+    file: ${PEOPLE_PUBS_SECRETS_DIR:-./secrets}/app_readonly_password
+  app_writer_password:
+    file: ${PEOPLE_PUBS_SECRETS_DIR:-./secrets}/app_writer_password
+
+volumes:
+  postgres-data:
+  # The schema bootstrap, copied from the image on every start; it holds no
+  # data, and deleting it loses nothing.
+  initdb:

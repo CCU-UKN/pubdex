@@ -1,0 +1,7 @@
+# DB-local runtime dependencies: what the people_pubs package needs to run its
+# ingestion commands and the read service. Test tools: requirements-dev.in.
+httpx[http2]==0.28.1
+psycopg[c]==3.3.6
+psycopg-pool==3.3.3
+starlette==1.7.0
+uvicorn==0.54.0

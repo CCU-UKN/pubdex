@@ -1,12 +1,12 @@
 # Task 1b — forge-portable test suite and public CI
 
-**Local verification record. Public-CI evidence pending.**
+**Local verification record, and public CI passed on 2026-10-07.**
 
 Implemented, and verified locally on 2026-10-05 with the commands below. The
-task also requires the suite to pass in public CI from a clean checkout. That
-result exists only once this work has been pushed and the workflow has passed
-for that commit; it is recorded under *Public-CI evidence* when it does, and
-nothing here asserts it before then. Separately, on 2026-10-06 the commit
+task also requires the suite to pass in public CI from a clean checkout: on
+2026-10-07 the published commit `6fa0318328547be3dbb9b234c3f392b452a363c3`
+passed the `DB tests` workflow on GitHub, recorded under *Public-CI evidence*.
+Separately, on 2026-10-06 the commit
 `ee9dee35214776cf020a7b1f2e33683d4246b182` passed the Forgejo workflow on a
 private, self-hosted Forgejo instance, recorded under *Self-hosted Forgejo
 evidence*; that instance is not publicly accessible, and those runs do not
@@ -15,6 +15,12 @@ external acceptance of task 1b.
 
 Project page: [PubDex at NLnet](https://nlnet.nl/project/PubDex/). The first
 funded result is recorded in [`TASK_1A.md`](TASK_1A.md).
+
+This record describes the suite as task 1b delivered it, in the published
+commit above. Later results extend it: task 2a added a sixth stage, the
+acceptance test of the Compose deployment, which is the only stage that uses
+Docker Compose, and tests of its own
+([`TASK_2A.md`](TASK_2A.md)).
 
 ## The agreed task
 
@@ -29,8 +35,9 @@ Three states are kept apart, and each row below says which one it concerns:
 
 - **repository implementation** — complete in the working tree verified on
   2026-10-05, and checkable with the commands below;
-- **public CI** — pending: a green run of the `DB tests` workflow from a clean
-  checkout of the pushed commit, to be recorded under *Public-CI evidence*;
+- **public CI** — passed on 2026-10-07: a green run of the `DB tests` workflow
+  from a clean checkout of the published commit, recorded under *Public-CI
+  evidence*;
 - **external acceptance** — not asserted here.
 
 ## What task 1b adds to the task-1a baseline
@@ -107,6 +114,14 @@ nothing on the commit path needs Docker.
 
 ## Acceptance matrix
 
+The counts below are those of the task-1b tree, and its suite had the five
+stages this record describes. Results added since then, from task 2a on,
+bring tests of their own, so a later checkout collects more;
+[`DB/TESTING_STRATEGY.md`](DB/TESTING_STRATEGY.md), *Coverage by purpose*,
+says which. Task 2a also added a sixth stage, the acceptance test of the
+Compose deployment, the only stage that uses Docker Compose
+([`TASK_2A.md`](TASK_2A.md)).
+
 | Required | Where it lives | How to verify | Expected result |
 |---|---|---|---|
 | Unit tests | [`DB/tests/`](DB/tests/) | stage 1, or `./run_checks.sh` alone | `649 passed, 110 skipped` on Linux as an ordinary user. The skips are the 107 integration tests, which need a database and run in stage 5, and three guardrails parametrized over discovery jobs, of which the shipped job list has none — each named in [`DB/tests/expected_skips.py`](DB/tests/expected_skips.py), where any other skip, an expected failure or a module skipped while collected fails the stage. Elsewhere the counts may include its two platform skips (running as root, no `timeout(1)`) |
@@ -116,8 +131,8 @@ nothing on the commit path needs Docker.
 | The integration suite on disposable PostgreSQL | [`DB/run_disposable_integration.sh`](DB/run_disposable_integration.sh), [`DB/tests/integration/`](DB/tests/integration/) | stage 5, or `./DB/run_disposable_integration.sh` | `107 collected: 107 passed, 0 failed, 0 errors, 0 skipped`, then `25 collected: 25 passed, 0 failed, 0 errors, 0 skipped` after the re-application, then `PASS: integration suite, runtime-patch re-application and view and role rerun on a disposable database.` |
 | Checks for committed secrets and local configuration | [`check_secrets_and_local_config.py`](check_secrets_and_local_config.py) | stage 2, or `.venv/bin/python check_secrets_and_local_config.py [--base <rev> [--head <rev>]]` | `secrets and local-configuration check ok (171 files)` for this tree; with a range, also the number of commits read. A finding names rule, file or commit, and line, never the matched text; a shallow clone or an unreadable object fails the check (status 2) instead of passing it. Scope and limits: [`DB/TESTING_STRATEGY.md`](DB/TESTING_STRATEGY.md) |
 | The same suite locally, through one documented command | [`run_ci_suite.sh`](run_ci_suite.sh), documented in [`README.md`](README.md) and [`DB/TESTING_STRATEGY.md`](DB/TESTING_STRATEGY.md) | `./run_ci_suite.sh` | `PASS: all 5 stages of the complete verification suite passed in <n>s.` |
-| The same suite in public CI from a clean checkout | [`.github/workflows/db-tests.yml`](.github/workflows/db-tests.yml) | open the `DB tests` run of the pushed commit without signing in | **pending** — a green run whose log ends with the same `PASS` line; see *Public-CI evidence* |
-| Forge portability | the tracked scripts above; the workflows hold no check; [`.forgejo/workflows/db-tests.yml`](.forgejo/workflows/db-tests.yml) for Forgejo | on a runner that meets the contract in [`DB/TESTING_STRATEGY.md`](DB/TESTING_STRATEGY.md), *Running the suite elsewhere*: install the requirements, run `./run_ci_suite.sh` | the same five stages with the same results. Demonstrated on the machine of the local record below, and on Forgejo: on a private, self-hosted Forgejo 16.0.5 instance with Forgejo Runner 13.2.0 on the same workstation, the Forgejo workflow passed for a first push, a pull request and a push of `ee9dee3` — see *Self-hosted Forgejo evidence*; not publicly accessible. Not demonstrated: GitHub's runner with the workflow's Python 3.11.17, until public CI has run, and a GitLab pipeline: the GitLab CI example there is tested offline and its commands ran on the local machine |
+| The same suite in public CI from a clean checkout | [`.github/workflows/db-tests.yml`](.github/workflows/db-tests.yml) | open the `DB tests` run of the pushed commit without signing in | **passed** on 2026-10-07 for the published commit `6fa0318`: run 37616370086, every step successful; see *Public-CI evidence* |
+| Forge portability | the tracked scripts above; the workflows hold no check; [`.forgejo/workflows/db-tests.yml`](.forgejo/workflows/db-tests.yml) for Forgejo | on a runner that meets the contract in [`DB/TESTING_STRATEGY.md`](DB/TESTING_STRATEGY.md), *Running the suite elsewhere*: install the requirements, run `./run_ci_suite.sh` | the same five stages with the same results. Demonstrated on the machine of the local record below, and on Forgejo: on a private, self-hosted Forgejo 16.0.5 instance with Forgejo Runner 13.2.0 on the same workstation, the Forgejo workflow passed for a first push, a pull request and a push of `ee9dee3` — see *Self-hosted Forgejo evidence*; not publicly accessible. Demonstrated in public CI as well: GitHub's `ubuntu-24.04` runner with the workflow's Python 3.11.17, for `6fa0318` (*Public-CI evidence*). Not demonstrated: a GitLab pipeline: the GitLab CI example there is tested offline and its commands ran on the local machine |
 | Tests of the suite's own tooling | [`DB/tests/test_ci_suite_script.py`](DB/tests/test_ci_suite_script.py), [`DB/tests/test_disposable_integration_script.py`](DB/tests/test_disposable_integration_script.py), [`DB/tests/test_migration_smoke_script.py`](DB/tests/test_migration_smoke_script.py), [`DB/tests/test_secrets_and_local_config.py`](DB/tests/test_secrets_and_local_config.py), [`DB/tests/test_offline_isolation.py`](DB/tests/test_offline_isolation.py), [`DB/tests/test_config_dotenv.py`](DB/tests/test_config_dotenv.py), [`DB/tests/test_network_guard.py`](DB/tests/test_network_guard.py), [`DB/tests/test_expected_skips.py`](DB/tests/test_expected_skips.py) | part of stage 1; they need no Docker | included in the stage-1 count |
 
 The task-1a demonstration (stage 4) is not a task-1b requirement in itself; it
@@ -139,7 +154,6 @@ nothing is left. [`DB/TESTING_STRATEGY.md`](DB/TESTING_STRATEGY.md),
 
 ## Decisions and evidence still open
 
-- **Public CI** — the green `DB tests` run of the pushed commit, below.
 - **A second forge** — the Forgejo workflow passed on a private,
   self-hosted Forgejo instance, with its runner on the same workstation
   (*Self-hosted Forgejo evidence*). That instance is not publicly
@@ -178,8 +192,8 @@ PostgreSQL image follows `postgres:16` unless an override names a digest,
 and the kernel, Docker Engine and system tools come from the host; every run
 prints the versions it used. This record ran on Python 3.11.5. The Forgejo
 runs below used CPython 3.11.17 built from the python.org source; the GitHub
-workflow's Python 3.11.17 on `ubuntu-24.04` has not run the suite yet, and
-the public CI run will be the first.
+workflow's Python 3.11.17 on `ubuntu-24.04` first ran the suite in the public
+CI run recorded below.
 [`DB/TESTING_STRATEGY.md`](DB/TESTING_STRATEGY.md), *Reproducing a verified
 run*, gives commands that fix this record's pip, package and PostgreSQL image
 versions, and lists the host versions a reproduction has to supply itself;
@@ -187,11 +201,26 @@ bit-for-bit reproduction is not claimed.
 
 ## Public-CI evidence
 
-*To be filled in after the push; nothing below is asserted yet.*
+Recorded on 2026-10-17 from GitHub's public run page and REST API, read
+without signing in.
 
-- Commit: *pending*
-- `DB tests` workflow run, viewable without signing in: *pending*
-- Result: *pending*
+- Commit: `6fa0318328547be3dbb9b234c3f392b452a363c3`, the published task-1b
+  commit on `main`. It differs from `ee9dee3`, the commit of the Forgejo runs
+  below, in `CHANGELOG.md`, `DB/TESTING_STRATEGY.md` and `TASK_1B.md` only.
+- `DB tests` workflow run:
+  [run 37616370086](https://github.com/CCU-UKN/pubdex/actions/runs/37616370086)
+  (run number 2, first attempt), started by the push of that commit to `main`
+  on 2026-10-07.
+- Result: **success**. Its one job, `checks`, ran on `ubuntu-24.04` from
+  11:46:33 to 11:48:15 UTC, and each of its steps succeeded, the step that
+  runs `./run_ci_suite.sh --base "$BASE" --head "$HEAD"` included.
+
+The run page opens without signing in, and the API answers the run's commit,
+status, conclusion, job and steps without credentials. The job's log itself
+was not read for this record: GitHub's API refused it to the request without
+credentials, answering that admin rights are needed. This run tested the
+task-1b commit; the results added after it, from task 2a on, did not run in
+it.
 
 ## Self-hosted Forgejo evidence
 
