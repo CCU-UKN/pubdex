@@ -1291,10 +1291,11 @@ What has been demonstrated, and what has not:
   ([`TASK_2A.md`](../TASK_2A.md), *Self-hosted Forgejo evidence*). On
   GitHub's hosted `ubuntu-24.04` runner with the workflow's Python 3.11.17,
   the five stages of the task-1b commit in public CI on 2026-10-07
-  ([`TASK_1B.md`](../TASK_1B.md), *Public-CI evidence*).
-- **Not demonstrated:** the Compose stages, 6 and 7, on GitHub's runner,
-  until public CI runs a commit that has them; a
-  GitLab pipeline — the GitLab
+  ([`TASK_1B.md`](../TASK_1B.md), *Public-CI evidence*). All seven stages,
+  including both Compose stages, passed on the same hosted runner platform
+  with Python 3.11.18 for task-2a release source `57a72dc` on 2026-11-02
+  ([`TASK_2A.md`](../TASK_2A.md), *Public-CI evidence*).
+- **Not demonstrated:** a GitLab pipeline — the GitLab
   example has not run as one; a run on a Forgejo instance anyone can
   inspect — the Forgejo runs were on a private one; any architecture other
   than x86_64; macOS with Docker Desktop, and Windows through WSL 2.

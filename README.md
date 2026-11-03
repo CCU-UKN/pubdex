@@ -97,14 +97,19 @@ NLnet project number: 2026-02-585.
 ### Running PubDex as a service
 
 On Linux x86_64, with Docker Engine 28.0.1 or later, except 28.2.0 to
-28.3.2, the Compose plugin 2.24.0 or later and Bash — and Git and Docker's
-buildx plugin to build the image, as long as no PubDex image is published.
+28.3.2, the Compose plugin 2.24.0 or later and Bash. Version 0.1.0 is public;
+[Selecting a published image](DEPLOYMENT.md#selecting-a-published-image)
+shows how to run it without a clone, using both verified image digests.
+Building the images from this checkout also needs Git and Docker's buildx
+plugin.
 Other Engines start the stack too, but can let other hosts on the local
 network reach the read service, which has no authentication
 ([`DEPLOYMENT.md`](DEPLOYMENT.md), *What you need*). Other architectures,
 Docker Desktop, rootless Docker, SELinux-enforcing hosts and Podman are
 neither tested nor supported: *Supported platforms* in `DEPLOYMENT.md` lists
 what is supported and what was tested.
+
+To build from source and start the deployment:
 
 ```bash
 ./create_secrets.sh                              # once: the password files, in secrets/

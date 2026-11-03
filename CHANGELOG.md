@@ -9,7 +9,7 @@ repository, and prototype functionality included here is not claimed as funded
 work; the entries below describe the funded results built on top of it.
 Background: [Origins and funding](README.md).
 
-## Container image and Compose deployment — verified locally and on a private Forgejo instance 2026-10-29, build changes verified locally on a working tree 2026-10-30, image publication and public CI pending
+## Container image and Compose deployment — version 0.1.0 published 2026-11-03
 
 Task 2a: a versioned container image for the ingestion and API service, and a
 one-command Compose deployment with PostgreSQL. This entry records what the
@@ -18,12 +18,15 @@ Compose deployment with its documentation, its acceptance test as the
 sixth stage of the complete suite, and the test of the operator's workflow as
 the seventh. The image holds the ingestion commands and a preliminary read
 service with liveness, readiness and one paged list endpoint, which is the
-foundation of the versioned read API of task 3a and not that API. No image has been published yet — the
-images will be pushed to `ghcr.io/ccu-ukn/pubdex` and
-`ghcr.io/ccu-ukn/pubdex-postgres` once the commit holding this result is
-published — and no public CI run has tested this
-result; this entry asserts neither, nor external acceptance. The
-Forgejo workflow has run it on a private instance only.
+foundation of the versioned read API of task 3a and not that API. Both
+`ghcr.io/ccu-ukn/pubdex:0.1.0` and
+`ghcr.io/ccu-ukn/pubdex-postgres:0.1.0` are published for `linux/amd64`,
+from source commit `57a72dc9f27766007b51c3d16ac7aa8c6ff3798b`.
+[Public CI](https://github.com/CCU-UKN/pubdex/actions/runs/41442310444)
+passed on that commit on 2026-11-02; anonymous retrieval and release
+acceptance by both digests passed on 2026-11-03. External acceptance of
+the task is not asserted. Earlier private Forgejo results remain attached
+to their original provisional commit.
 [`TASK_2A.md`](TASK_2A.md) is the requirement-by-requirement record.
 
 The maintainer's release-policy decision of 2026-10-30 adopts the custom
@@ -31,7 +34,7 @@ PostgreSQL image for the initial versioned release, preserved unchanged
 with dated verification and known limitations. No fixed maintenance
 schedule or security-update deadline is promised; future updates, if
 provided, will use new versions ([`DEPLOYMENT.md`](DEPLOYMENT.md), *The
-PostgreSQL image*). Publication and final-commit verification remain pending.
+PostgreSQL image*).
 
 ### The read service
 
@@ -463,9 +466,33 @@ installations without network or refused without it, the C build from
 paths given relative to the caller's directory, and pip configuration aimed
 at the inputs or the destination.
 
-### Verification so far
+### Verification
 
-The latest full verification was on an uncommitted working tree of
+The final source commit `57a72dc9f27766007b51c3d16ac7aa8c6ff3798b`
+passed the clean-clone seven-stage suite locally on 2026-10-30 in 374
+seconds and in public CI on 2026-11-02 in 552 seconds. Each run passed
+1407 offline tests with 125 expected skips, 122 integration tests and 27
+checks after schema patch reapplication, none skipped. Both deployment
+and operator acceptance passed. GitHub's default C setup passed; its
+installers reported no network namespace isolation, using `--no-index`
+without a network sandbox on that runner.
+
+The separately retained release image pair passed release-mode deployment
+and operator acceptance before publication. On 2026-11-03 both public
+version tags and manifest/config digests were checked anonymously, and all
+23 compressed layers were downloaded and hash-verified. Anonymous
+`--release --pull` acceptance then passed on the published digests, using
+the application's packaged Compose file, and confirmed cleanup.
+
+- Application manifest: `sha256:24d570015b20f222c767a8bb89dd18d792abbd25cc730137f7b8bc285df6a325`.
+- PostgreSQL manifest: `sha256:33988fb179e2065e653ad7813cecf812c21f4381537b8b8db546ad37236b780a`.
+
+Both images retain version 0.1.0 and the exact source revision above. These
+runs precede this evidence update; they do not claim a pipeline on the
+later documentation commit. [`TASK_2A.md`](TASK_2A.md) records the exact
+commands, image identities, environments and limits.
+
+Earlier full verification was on an uncommitted working tree of
 `a0219be7bab86ce3fc53262f52089ac453589de8` on 2026-10-30. The seven-stage
 suite passed in 375 seconds: 1407 offline tests passed, 125 expected skips,
 122 integration tests and then 27 on the new PostgreSQL 16.15 image. The
@@ -486,7 +513,8 @@ evidence. [`TASK_2A.md`](TASK_2A.md) records the exact tested identities.
 The default C setup passed in a disposable Ubuntu 24.04 container with
 CPython 3.11.17 and libpq 16.15. It reported that network isolation was
 unavailable there. The pure-Python setup passed on the host with isolation.
-The C setup has not run on either CI host for the current candidate.
+These earlier setup checks predate the successful public CI run above;
+the current implementation has not run on the private Forgejo host.
 
 Earlier, a fresh clone of provisional local commit
 `a0219be7bab86ce3fc53262f52089ac453589de8` passed the seven-stage suite
@@ -496,9 +524,9 @@ operator acceptance on two builds. The same commit passed three private
 Forgejo workflow scenarios: first push, pull request and ordinary push.
 Those results predate the two-image build and dependency changes above.
 
-Public CI, both published release images and acceptance of anonymously
-pulled images remain pending. Earlier local tests do not establish those
-results or external acceptance of the task.
+The earlier local and private Forgejo results do not establish public
+publication or external acceptance; the dated public evidence is the
+separate record above.
 
 ## Forge-portable test suite — verified locally 2026-10-05, public CI passed 2026-10-07
 

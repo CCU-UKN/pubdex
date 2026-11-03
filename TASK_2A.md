@@ -1,37 +1,28 @@
 # Task 2a — container image and Compose deployment
 
-**Local and self-hosted Forgejo verification record. Published image and
-public CI pending.**
+**Version 0.1.0 published on 2026-11-03. Public CI and anonymous release
+acceptance passed.**
 
-Implemented, and verified locally and on a private Forgejo instance, last on
-2026-10-29, for the local commit
-`a0219be7bab86ce3fc53262f52089ac453589de8`, with the commands below; the
-earlier records stay below it. This record was written after those runs, in
-a later change: the runs tested that commit, not the commit that records
-them.
-Task 2a also requires a published, versioned image and a CI run that starts
-the stack from a clean clone. Neither exists yet: no PubDex image has been
-pushed — it will be published as `ghcr.io/ccu-ukn/pubdex` once the commit
-holding this result is published, and not before — and no public CI run
-has tested a commit holding this result. Both are recorded under
-*Published-image evidence* and *Public-CI evidence* once they exist, and
-nothing here asserts them before then. Nothing here asserts
-external acceptance of task 2a either.
+The release source is commit
+[`57a72dc9f27766007b51c3d16ac7aa8c6ff3798b`](https://github.com/CCU-UKN/pubdex/commit/57a72dc9f27766007b51c3d16ac7aa8c6ff3798b).
+Its clean-clone seven-stage suite passed locally on 2026-10-30 and in
+[public CI](https://github.com/CCU-UKN/pubdex/actions/runs/41442310444) on
+2026-11-02. Both versioned images are public; anonymous retrieval and
+release acceptance by their exact digests passed on 2026-11-03
+(*Published-image evidence*). This documentation was updated after those
+runs; the results belong to the source commit and images named here.
+External acceptance of task 2a is not asserted.
 
-On 2026-10-30 the working tree changed again: psycopg's C implementation,
-built against Debian's libpq, replaces psycopg-binary; downloads are
-separated from installations; and the deployment runs PostgreSQL built
-from source without SQL/XML. Those changes were verified locally on that
-working tree, whose images are `-dirty` builds (*Local verification
-record*). No commit holding them has been verified yet; the earlier
-results remain attached to the commits and images actually tested.
+The release includes psycopg's C implementation built against Debian's
+libpq, separate download and installation steps, and PostgreSQL built
+from source without SQL/XML. Earlier working-tree and private Forgejo
+results remain attached to the commits and images actually tested below.
 
 On 2026-10-30 the maintainer adopted the custom PostgreSQL image for the
 initial versioned release, to be preserved unchanged with dated verification
 and known limitations. No fixed maintenance schedule or security-update
 deadline is promised; future updates, if provided, will use new versions
-([`DEPLOYMENT.md`](DEPLOYMENT.md), *The PostgreSQL image*). Publication
-and final-commit verification remain pending.
+([`DEPLOYMENT.md`](DEPLOYMENT.md), *The PostgreSQL image*).
 
 Project page: [PubDex at NLnet](https://nlnet.nl/project/PubDex/). The
 earlier funded results are recorded in [`TASK_1A.md`](TASK_1A.md) and
@@ -47,22 +38,20 @@ earlier funded results are recorded in [`TASK_1A.md`](TASK_1A.md) and
 
 Five states are kept apart, and each row below says which one it concerns:
 
-- **repository implementation** — verified locally on the working tree of
-  2026-10-30, including the two-image build and acceptance tests. Earlier
-  clean-clone results belong to the provisional local commit
-  `a0219be7bab86ce3fc53262f52089ac453589de8`, based on published `6fa0318`;
-  that commit predates the current build and dependency changes. The final
-  publication commit needs its own clean-clone verification;
-- **self-hosted Forgejo** — the Forgejo workflow passed for that commit on
-  2026-10-29, for its first push, a pull request and an ordinary push, on a
+- **repository implementation** — verified in a clean clone of release
+  commit `57a72dc9f27766007b51c3d16ac7aa8c6ff3798b` on 2026-10-30,
+  including the two-image build, release acceptance and operator workflow;
+- **self-hosted Forgejo** — the Forgejo workflow passed for earlier
+  provisional commit `a0219be7` on 2026-10-29, for its first push, a pull
+  request and an ordinary push, on a
   private instance on the maintainer's workstation (*Self-hosted Forgejo
   evidence*). It is not publicly accessible, so it complements public CI
   and does not replace it;
-- **published image** — pending: a versioned image, pushed to a public
-  registry, pulled without credentials by version and digest, and passing
-  the acceptance test there;
-- **public CI** — pending: a green run of the `DB tests` workflow, whose
-  stages 6 and 7 start the stack, for a commit holding this result;
+- **published images** — both 0.1.0 images public, their tags and digests
+  checked without credentials, every layer downloaded and hash-verified,
+  and release acceptance passed by digest on 2026-11-03;
+- **public CI** — the `DB tests` workflow passed all seven stages for the
+  release source commit on 2026-11-02; stages 6 and 7 start the stack;
 - **external acceptance** — not asserted here.
 
 ## What task 2a adds
@@ -117,7 +106,7 @@ Three steps prepare a clone, once, before the first start: `./create_secrets.sh`
 creates the secret files, `./build_image.sh` builds the application and
 PostgreSQL images from the clone, and `.env` names them in
 `PEOPLE_PUBS_IMAGE` and `PEOPLE_PUBS_POSTGRES_IMAGE` in place of the
-release `compose.yaml` names. Once an image is published, no clone is
+release `compose.yaml` names. With the published release, no clone is
 needed: the Compose file is taken out of the image, which is pulled by
 version and digest, and `.env` names it ([`DEPLOYMENT.md`](DEPLOYMENT.md),
 *Selecting a published image*). Then one command starts PostgreSQL and the
@@ -155,7 +144,7 @@ up* says exactly what each step does.
 |---|---|---|---|---|
 | A container image … for the ingestion and API service | [`Dockerfile`](Dockerfile), [`.dockerignore`](.dockerignore), [`build_image.sh`](build_image.sh), the locks [`DB/requirements-pip.txt`](DB/requirements-pip.txt), [`DB/requirements-build.txt`](DB/requirements-build.txt) and [`DB/requirements.txt`](DB/requirements.txt), the downloader [`DB/fetch_verified.py`](DB/fetch_verified.py), the installers [`DB/install_pip.py`](DB/install_pip.py) and [`DB/install_locked.py`](DB/install_locked.py); the PostgreSQL image [`postgres.Dockerfile`](postgres.Dockerfile); `python -m people_pubs.api` and `python -m people_pubs.sync.<command>` | `./build_image.sh`; stage 6 runs the read service and the ingestion from the image and checks its files and Python packages as user 10001; [`DB/tests/test_container_files.py`](DB/tests/test_container_files.py) pins the build inputs | one image for the ingestion commands and the preliminary read service, carrying the schema bootstrap of `DB/init/`, `compose.yaml`, `create_secrets.sh` and `set_passwords.sh` under `/opt/pubdex`; non-root user 10001; the base image fixed by digest; every locked file downloaded in a stage of its own and kept only by its hash, so that a changed file fails the build; pip and every Python package installed without network from binary wheels, but psycopg-c, built from its verified source against Debian's libpq in a stage with a compiler that does not reach the image; pip removed again after `pip check`, with the wheels `ensurepip` would install it from, so that neither is in the image's file system; no credential, `.git`, environment file, data or local note in the build context or a layer | verified locally |
 | … versioned | [`VERSION`](VERSION) (`0.1.0`), the OCI labels set by `build_image.sh`; a deployment is that image with the `compose.yaml` it carries, which names the release by its version tag ([`DEPLOYMENT.md`](DEPLOYMENT.md), *What identifies a deployment*) | `docker image inspect --format '{{json .Config.Labels}}' <image>`; stage 6 prints the labels, checks the version and revision of its build and that the build carries the checkout's `compose.yaml` and `DB/init/`; `--expect-version`, `--expect-revision` and `--release` check a given image and, with `--release`, start the `compose.yaml` it carries; [`DB/tests/test_build_image_script.py`](DB/tests/test_build_image_script.py) checks that the version comes from `VERSION`, [`DB/tests/test_stack_acceptance_script.py`](DB/tests/test_stack_acceptance_script.py) the identity checks | version `0.1.0`, revision the source commit (`<commit>-dirty` for a modified tree, and then no version tag), transform version separate; a missing, `unknown`, malformed or other label, a `-dirty` image, an image without its `compose.yaml` or a release whose `compose.yaml` names another version refused before the stack starts | verified locally |
-| We'll publish … | [`DEPLOYMENT.md`](DEPLOYMENT.md), *Publishing an image* — a manual procedure for any OCI registry; PubDex's own images at `ghcr.io/ccu-ukn/pubdex` and, since 2026-10-30, `ghcr.io/ccu-ukn/pubdex-postgres` | in a clone: `./run_stack_acceptance.sh --release --pull --image ghcr.io/ccu-ukn/pubdex:0.1.0@sha256:<digest> --postgres-image ghcr.io/ccu-ukn/pubdex-postgres:0.1.0@sha256:<digest> --expect-version 0.1.0 --expect-revision <commit>`, without credentials | version tags and recorded digests of both images, `linux/amd64`, the revision of the release commit, no `latest` tag; the images passing as a release with the `compose.yaml` the application image carries | **pending** — no image pushed; it is pushed once the commit holding this result is published |
+| We'll publish … | [`DEPLOYMENT.md`](DEPLOYMENT.md), *Publishing an image* — a manual procedure for any OCI registry; PubDex's own images at `ghcr.io/ccu-ukn/pubdex` and, since 2026-10-30, `ghcr.io/ccu-ukn/pubdex-postgres` | in a clone: `./run_stack_acceptance.sh --release --pull --image ghcr.io/ccu-ukn/pubdex:0.1.0@sha256:<digest> --postgres-image ghcr.io/ccu-ukn/pubdex-postgres:0.1.0@sha256:<digest> --expect-version 0.1.0 --expect-revision <commit>`, without credentials | version tags and recorded digests of both images, `linux/amd64`, the revision of the release commit, no `latest` tag; the images passing as a release with the `compose.yaml` the application image carries | **passed 2026-11-03** — both published digests checked anonymously; release acceptance passed (*Published-image evidence*) |
 | … the API service | [`DB/people_pubs/api/`](DB/people_pubs/api/), [`DB/README.md`](DB/README.md) section 11 | stage 1 (138 offline tests), stage 5 (integration), stage 6 over HTTP | the demonstration's publication with the export's fields, as `app_readonly`, read-only, from a preliminary service with liveness, readiness and one paged list endpoint under `/v0/`, which may change | verified locally, for that preliminary service; the versioned read API is task 3a and not claimed here |
 | a one-command Compose deployment with PostgreSQL and PubDex | [`compose.yaml`](compose.yaml) | `docker compose up --wait` after the one-time steps above; stage 6, step 3; for an image in a registry, the files taken out of the image and the secret files, then the same command (*Local verification record*, 2026-10-27) | both services healthy from an empty volume, with no manual SQL; the application image pulled when Docker does not have it | verified locally |
 | on portable defaults | [`compose.yaml`](compose.yaml): no fixed container, network or volume name, the read service on 127.0.0.1, PostgreSQL on no host port, settings from the environment; [`DEPLOYMENT.md`](DEPLOYMENT.md), *Portable defaults*, says what they cover and what not, and *Supported platforms* where the deployment is supported; the version requirement in [`DB/lib/docker_versions.sh`](DB/lib/docker_versions.sh) | stage 6, step 3, and stage 7, step 3, which read the port bindings Docker reports; [`DB/tests/test_container_files.py`](DB/tests/test_container_files.py), [`DB/tests/test_docker_versions.py`](DB/tests/test_docker_versions.py); the prerequisite checks of the suite and of both acceptance tests; the configurations tested, each with its date, in *Supported platforms* | runs as a project of its own next to other stacks; the read service bound to 127.0.0.1 alone; Docker Engine 28.0.1 or later, except 28.2.0 to 28.3.2 — the releases Docker documents as keeping other hosts away from ports published on loopback — and the Compose plugin 2.24.0 required, other versions refused before anything is created; Linux on x86_64 with the `linux/amd64` image the only platform built, tested and supported | verified locally, as configuration, with Docker Engine 29.9.2: no test connects from another host, and that other hosts are refused rests on Docker's documentation of those releases; arm64, amd64 emulation, Docker Desktop, rootless Docker, user-namespace remapping, SELinux-enforcing hosts and Podman neither tested nor supported |
@@ -163,7 +152,7 @@ up* says exactly what each step does.
 | secret injection … documented | Compose file secrets, [`create_secrets.sh`](create_secrets.sh), [`set_passwords.sh`](set_passwords.sh), `PEOPLE_PUBS_API_DB_PASSWORD_FILE`, `PEOPLE_DB_PASSWORD_FILE`; [`DEPLOYMENT.md`](DEPLOYMENT.md), *Secrets*, *Changing a password* and *Roles and personal data* | stage 6, steps 2 and 8; stage 7, steps 6, 7 and 9: password changes with `set_passwords.sh` for files overwritten in place and replaced by rename, checked with new connections, and the role model; stage 1 (offline tests of the scripts and the password-file format) | each container only its own role's password, from a file; none in a container's configured environment, the database server's environment, a command line, build argument, image, rendered configuration, log or `docker inspect` output; a changed file applied by `set_passwords.sh`, which changes nothing until its checks pass and confirms each role by a SCRAM-authenticated connection, without a restart of PostgreSQL; what the file storage does not protect is stated, and that an ingestion command hands its password to libpq in its own environment | verified locally |
 | health checks … documented | `/livez`, `/readyz`, the Compose health checks; [`DEPLOYMENT.md`](DEPLOYMENT.md), *Health and readiness* | stage 6, steps 3, 4 and 6; stage 5 | liveness without the database; readiness 503 while PostgreSQL is down and 200 again after it is back, without a restart | verified locally |
 | persistent volumes … documented | the named volume `<project>_postgres-data`; [`DEPLOYMENT.md`](DEPLOYMENT.md), *Starting, stopping and removing* and *Data and storage*, with *Backup and restore* | stage 6, step 7; stage 7, step 8 | the same records and role passwords after `--force-recreate` and after `down` and `up`, with no new initialisation; only `down --volumes` deletes the database; a dump restored into a new stack serves the same records, with the roles' privileges | verified locally |
-| CI will start the stack from a clean clone | [`run_ci_suite.sh`](run_ci_suite.sh) stage 6, [`run_stack_acceptance.sh`](run_stack_acceptance.sh); the workflows [`.github/workflows/db-tests.yml`](.github/workflows/db-tests.yml) and [`.forgejo/workflows/db-tests.yml`](.forgejo/workflows/db-tests.yml), adapters with the steps of task 1b, `.venv` now set up by [`setup_venv.sh`](setup_venv.sh) | `./run_ci_suite.sh`; public CI of the pushed commit | `PASS: all 7 stages of the complete verification suite passed in <n>s.` | verified locally, in a fresh clone; the Forgejo workflow passed on a private instance (*Self-hosted Forgejo evidence*); **public CI pending** |
+| CI will start the stack from a clean clone | [`run_ci_suite.sh`](run_ci_suite.sh) stage 6, [`run_stack_acceptance.sh`](run_stack_acceptance.sh); the workflows [`.github/workflows/db-tests.yml`](.github/workflows/db-tests.yml) and [`.forgejo/workflows/db-tests.yml`](.forgejo/workflows/db-tests.yml), adapters with the steps of task 1b, `.venv` now set up by [`setup_venv.sh`](setup_venv.sh) | `./run_ci_suite.sh`; public CI of the pushed commit | `PASS: all 7 stages of the complete verification suite passed in <n>s.` | **passed 2026-11-02** — all seven stages on the release source commit (*Public-CI evidence*) |
 | … and run a small ingest | `docker compose run --rm demo` inside the stack: the synthetic roster and the bundled ORCID and Crossref payloads; the documented roster import on standard input, the refresh and the export | stage 6, step 5; stage 7, steps 4 and 5 | ingested as `app_writer` with no metadata-provider request; `GET /v0/publications` serves `10.5555/pubdex-fixture-001` with its expected fields; cumulative provenance `crossref+orcid` in the database | verified locally |
 
 ## The acceptance test
@@ -274,11 +263,34 @@ proves its lifecycle offline.
 
 ## Local verification record
 
-The latest full run was on an uncommitted working tree of
+On 2026-10-30 a clean clone of the final release source,
+`57a72dc9f27766007b51c3d16ac7aa8c6ff3798b`, passed all seven stages in
+374 seconds: 1407 offline tests passed with 125 expected skips, followed
+by 122 integration tests and 27 checks after patch reapplication, none
+skipped. The newly built PostgreSQL 16.15 image was selected explicitly
+for stages 3–5. The source-range and secrets checks passed. The host used
+CPython 3.11.17, the documented pure-Python setup with libpq 16.15 and
+required network isolation, Docker Engine 29.9.2 and Compose 5.6.1.
+
+The build from that clone produced both release images with version 0.1.0
+and that exact revision, with no `-dirty` suffix. Their local
+image IDs were application
+`sha256:b3f67af382c60caf9b29f2104116d1665738e9e8d3d6ae64fc8229e74f24b625`
+and PostgreSQL
+`sha256:bdcd1cb38aa5a710d6796df9845f1f45156a2df5cfce992272d565272bdf518c`.
+Release-mode deployment and the operator workflow passed separately on
+this retained pair, including password changes and backup restoration.
+These are the images subsequently published below. The clone stayed
+clean and all pre-existing containers, volumes and networks were kept.
+
+### Earlier working-tree verification
+
+An earlier full run was on an uncommitted working tree of
 `a0219be7bab86ce3fc53262f52089ac453589de8` on 2026-10-30. Every image
 built there carries that commit's revision with `-dirty`; `--release`
 refuses it. Later documentation edits do not constitute a new full-suite
-run. Final-commit and published-image evidence remain pending.
+run. These are historical working-tree results, separate from the final
+commit and published-image results.
 
 The host was Linux x86_64 (Ubuntu 24.04.5), with Docker Engine 29.9.2 and
 BuildKit 0.34.0. The development environment used CPython 3.11.17 and
@@ -322,29 +334,68 @@ Those results predate the two-image build and the dependency changes of
 2026-10-30. The private Forgejo workflow also passed for that provisional
 commit (*Self-hosted Forgejo evidence*). Neither that commit's results nor
 the dirty working-tree runs above are results of the final publication
-commit. None of these images was published.
+commit. Those earlier images were not published.
 
 ## Published-image evidence
 
-*To be filled in after publication; nothing below is asserted yet.*
+Published and verified without credentials on 2026-11-03:
 
-- Registry: `ghcr.io/ccu-ukn/pubdex` for the application image, chosen, and
-  `ghcr.io/ccu-ukn/pubdex-postgres` for the PostgreSQL image, the name
-  `compose.yaml` gives it; nothing pushed yet
-- References, for both images: *pending*
-- Digests, for both images: *pending*
-- Platforms, for both images: *pending*
-- Revision labels, and the commit they name: *pending*
-- Anonymous pull and `--release` acceptance run of the published images,
-  by digest, in a clean clone at that commit: *pending*
+| Image | Version tag | Registry manifest digest |
+|---|---|---|
+| Application | `ghcr.io/ccu-ukn/pubdex:0.1.0` | `sha256:24d570015b20f222c767a8bb89dd18d792abbd25cc730137f7b8bc285df6a325` |
+| PostgreSQL | `ghcr.io/ccu-ukn/pubdex-postgres:0.1.0` | `sha256:33988fb179e2065e653ad7813cecf812c21f4381537b8b8db546ad37236b780a` |
+
+Both are `linux/amd64`, version 0.1.0, revision
+`57a72dc9f27766007b51c3d16ac7aa8c6ff3798b`. Their registry manifests'
+config digests match the retained image IDs above. The version tags resolve
+to these manifest digests; the release is preserved unchanged.
+
+Without account credentials, both manifests, configuration blobs and all
+23 compressed image layers were downloaded and checked against their
+SHA-256 digests (57,274,990 application-layer bytes and 66,884,680
+PostgreSQL-layer bytes). This check did not use Docker's local image cache.
+
+In the clean clone at the release source commit, with an empty Docker
+configuration, this command passed using the Compose file carried inside
+the application image:
+
+```bash
+./run_stack_acceptance.sh --release --pull \
+  --image ghcr.io/ccu-ukn/pubdex:0.1.0@sha256:24d570015b20f222c767a8bb89dd18d792abbd25cc730137f7b8bc285df6a325 \
+  --postgres-image ghcr.io/ccu-ukn/pubdex-postgres:0.1.0@sha256:33988fb179e2065e653ad7813cecf812c21f4381537b8b8db546ad37236b780a \
+  --expect-version 0.1.0 --expect-revision 57a72dc9f27766007b51c3d16ac7aa8c6ff3798b
+```
+
+Docker resolved and pulled both digests anonymously; its layer store
+already held the verified image contents. The independent full-layer
+download above checked anonymous access to all image bytes. On Ubuntu
+24.04.5, kernel 6.8, Engine 29.9.2 and Compose 5.6.1, release acceptance
+verified the labels, runtime packages, synthetic ingest and read service,
+readiness through a database restart, persistence through recreation and
+secret handling. Cleanup left no added containers, volumes or networks;
+the clone remained clean. Other platform limits are unchanged
+([`DEPLOYMENT.md`](DEPLOYMENT.md), *Supported platforms*).
 
 ## Public-CI evidence
 
-*To be filled in after the push; nothing below is asserted yet.*
+- Source commit: `57a72dc9f27766007b51c3d16ac7aa8c6ff3798b`.
+- [`DB tests` push run, attempt 1](https://github.com/CCU-UKN/pubdex/actions/runs/41442310444),
+  completed successfully on 2026-11-02.
+- All seven stages passed in 552 seconds: 1407 offline tests passed with
+  125 expected skips, then 122 integration tests and 27 checks after patch
+  reapplication, none skipped. Stages 6 and 7 built both images from the
+  checkout and passed deployment and operator acceptance with cleanup.
+  Those CI builds are separate from the retained images published above.
+- GitHub-hosted Ubuntu 24.04, CPython 3.11.18, pip 26.2.2, psycopg 3.3.6
+  C implementation with libpq 18.6, Docker Engine 28.0.4, Compose 2.38.2.
+  The default C setup passed. Its installers reported that no network
+  namespace was available: pip used `--no-index`, without a network
+  sandbox on that runner. The image build's offline installation remains
+  a separate check.
 
-- Commit: *pending*
-- `DB tests` workflow run, viewable without signing in: *pending*
-- Result: *pending*
+This evidence identifies the release source commit. A later documentation
+commit does not change either published image's revision or make this
+pipeline a run of that later commit.
 
 ## Self-hosted Forgejo evidence
 
@@ -393,21 +444,11 @@ the workstation. The images of these runs were not pushed or scanned.
 
 The working tree of the 2026-10-30 entry of the *Local verification
 record*, which changes how both workflows set up `.venv` and adds the
-PostgreSQL image to stages 6 and 7, has not run on that instance; the
-commit that holds it needs runs of its own.
+PostgreSQL image to stages 6 and 7, has not run on that private instance.
+The final release source passed public CI as recorded above.
 
-## Decisions and evidence still open
+## Verification limits
 
-- **The release check of the published commit** —
-  `./run_stack_acceptance.sh --release`, with an image built from a clean
-  clone at the commit that publishes this result, is step 3 of *Publishing
-  an image* and needs that commit. It passed on 2026-10-29 for two images
-  built from the local commit `a0219be7` in a fresh clone, with the
-  complete suite and the operator's workflow (*Local verification record*),
-  and earlier for images of clean local commits before it; none of these is
-  that run. An image built at another commit carries that commit as its
-  revision label and needs the release check and the operator's workflow —
-  since 2026-10-30, for both images of the release.
 - **Other platforms** — supported is Linux on x86_64 with the Docker Engine
   and Compose releases of the requirement, running the `linux/amd64` image.
   `linux/arm64`, amd64 emulation, Docker Desktop, rootless Docker,

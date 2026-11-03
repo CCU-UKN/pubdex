@@ -25,8 +25,10 @@ docker version --format '{{.Server.Version}}'    # 28.0.1 or later, except 28.2.
 docker compose version --short                   # 2.24.0 or later
 ```
 
-Prepare the clone once. No PubDex image is published yet, so you build the
-two images of the deployment:
+Version 0.1.0 is published for `linux/amd64`. To use it without a clone,
+follow [Selecting a published image](#selecting-a-published-image), which
+names both verified image digests. To build the two images yourself,
+prepare a clone once:
 
 ```bash
 ./create_secrets.sh                              # the three password files, in secrets/
@@ -56,7 +58,7 @@ docker compose down                              # removes the containers; the d
 docker compose down --volumes                    # also deletes the database
 ```
 
-With a published image no clone is needed ([Selecting a published
+With the published images no clone is needed ([Selecting a published
 image](#selecting-a-published-image)). The rest of this page is the detail.
 
 ## Contents
@@ -130,7 +132,7 @@ listed under *Tested* ran on one machine, at the date given.
 
 | Platform | Architecture | Docker Engine and Compose | Status | Tested | Date |
 |---|---|---|---|---|---|
-| Linux, with Docker Engine run as root and its default firewall backend, `iptables` | x86_64; the image is `linux/amd64` | Engine 28.0.1 or later, except 28.2.0 to 28.3.2; Compose plugin 2.24.0 or later | **supported** | Ubuntu 24.04.5, kernel 6.8, AppArmor, Docker's packages — Engine 29.9.2, Compose 5.6.1, buildx 0.38.1: the complete verification suite, both acceptance tests included, on images built from the checkout, last in a fresh clone of a local commit and by the Forgejo workflow on a runner on the same machine ([`TASK_2A.md`](TASK_2A.md), *Local verification record* and *Self-hosted Forgejo evidence*) | 2026-10-29 |
+| Linux, with Docker Engine run as root and its default firewall backend, `iptables` | x86_64; the image is `linux/amd64` | Engine 28.0.1 or later, except 28.2.0 to 28.3.2; Compose plugin 2.24.0 or later | **supported** | Ubuntu 24.04.5, kernel 6.8, AppArmor, Docker's packages — Engine 29.9.2, Compose 5.6.1, buildx 0.38.1: the complete verification suite and both acceptance tests in a clean clone of release source 57a72dc; anonymous release acceptance on both published digests ([`TASK_2A.md`](TASK_2A.md), *Local verification record* and *Published-image evidence*) | 2026-10-30 and 2026-11-03 |
 | the same | the same | the same | **supported** | Ubuntu 24.04's `docker.io` 29.1.3, `docker-compose-v2` 2.40.3 and `docker-buildx` 0.30.1, in a throwaway Docker daemon inside a privileged container on the machine above: `build_image.sh`; the image pushed to a registry, then pulled and started by `docker compose up --wait` beside only `compose.yaml` and the secret files; the steps of [Selecting a published image](#selecting-a-published-image) as they were then, before `set_passwords.sh` existed | 2026-10-23, with the inputs of that day |
 | Linux | x86_64 | Engine before 28.0.1, or 28.2.0 to 28.3.2; Compose plugin before 2.24.0 | **refused** by the suite and the tests of [Checking a deployment](#checking-a-deployment) before they create anything; `docker compose` itself does not check, and starts a stack whose read service other hosts can reach | Engine 25.0.5 with Compose 2.24.0 and buildx 0.16.2, and Debian 13's `docker.io` 26.1.5 with `docker-compose` 2.26.1 and `docker-buildx` 0.13.1, each in a throwaway daemon as above: the same steps, and with 25.0.5 on 2026-10-27 also the password changes and a restore. These runs predate the requirement: they show that the stack runs there, not that other hosts are kept out. Compose 2.23.3 and 2.20.2 were refused before anything was created | 2026-10-23 and 2026-10-27; Compose 2026-10-19 |
 | Linux | arm64 (aarch64) | — | **not supported**: no `linux/arm64` image is built, tested or scanned | nothing; the locked Python packages have aarch64 wheels and both base images have arm64 variants, which shows only that a build could be tried | — |
@@ -140,7 +142,14 @@ listed under *Tested* ran on one machine, at the date given.
 | A host enforcing SELinux, such as Fedora or Red Hat Enterprise Linux | x86_64 | within the range of the first row | **not supported**, untested; the containers probably cannot read the secret files until they carry a container label (`chcon -Rt container_file_t secrets`) | nothing | — |
 | Podman, also through its Docker compatibility | any | not Docker Engine | **not supported**, untested; the version checks are those of Docker Engine and its Compose plugin, and how Podman handles the temporary mounts, the volume ownership `bootstrap` relies on and `start_interval` is unknown | nothing | — |
 
-Within the supported range only Engines 29.1.3 and 29.9.2 have run the
+The release source also passed the complete suite on GitHub-hosted Ubuntu
+24.04 with Engine 28.0.4 and Compose 2.38.2 on 2026-11-02. On 2026-11-03
+the published images passed anonymous release acceptance on the first
+configuration above, after every image layer was downloaded and
+hash-verified without credentials ([`TASK_2A.md`](TASK_2A.md),
+*Published-image evidence* and *Public-CI evidence*).
+
+Within the supported range only Engines 28.0.4, 29.1.3 and 29.9.2 have run the
 deployment; for every other release in it, support rests on the requirement
 and on Docker's documentation. No test connects from another host:
 the acceptance tests read the port bindings Docker reports, so that other
@@ -778,17 +787,21 @@ and apt remain.
 
 ### Selecting a published image
 
-None is published yet. Releases will go to `ghcr.io/ccu-ukn/pubdex` and
+Version 0.1.0 is public at `ghcr.io/ccu-ukn/pubdex` and
 `ghcr.io/ccu-ukn/pubdex-postgres`, next to the [canonical
-repository](https://github.com/CCU-UKN/pubdex), each named by version, the
-two images' digests and commit; the application image carries the rest, so
-no clone is needed. With the Engine and Compose versions checked as in [The short
-path](#the-short-path), in an empty directory, whose name becomes the
+repository](https://github.com/CCU-UKN/pubdex). Both images are
+`linux/amd64`, built from source commit
+`57a72dc9f27766007b51c3d16ac7aa8c6ff3798b`; their publication and
+anonymous verification are recorded in [`TASK_2A.md`](TASK_2A.md),
+*Published-image evidence*. The application image carries the deployment
+files, so no clone is needed. With the Engine and Compose versions checked
+as in [The short path](#the-short-path), in an empty directory, whose name becomes the
 project's:
 
 ```bash
-mkdir pubdex && cd pubdex
-docker run --rm ghcr.io/ccu-ukn/pubdex:<version> tar -cC /opt/pubdex compose.yaml create_secrets.sh set_passwords.sh | tar -x
+mkdir pubdex
+cd pubdex
+docker run --rm ghcr.io/ccu-ukn/pubdex:0.1.0 tar -cC /opt/pubdex compose.yaml create_secrets.sh set_passwords.sh | tar -x
 bash create_secrets.sh
 docker compose up --wait
 ```
@@ -800,18 +813,18 @@ its schema and Compose file, give the digests in the first command and in
 would otherwise pull the movable tags again.
 
 ```bash
-docker run --rm ghcr.io/ccu-ukn/pubdex:<version>@sha256:<digest> tar -cC /opt/pubdex compose.yaml create_secrets.sh set_passwords.sh | tar -x
-echo 'PEOPLE_PUBS_IMAGE=ghcr.io/ccu-ukn/pubdex:<version>@sha256:<digest>' > .env
-echo 'PEOPLE_PUBS_POSTGRES_IMAGE=ghcr.io/ccu-ukn/pubdex-postgres:<version>@sha256:<postgres digest>' >> .env
+docker run --rm ghcr.io/ccu-ukn/pubdex:0.1.0@sha256:24d570015b20f222c767a8bb89dd18d792abbd25cc730137f7b8bc285df6a325 tar -cC /opt/pubdex compose.yaml create_secrets.sh set_passwords.sh | tar -x
+echo 'PEOPLE_PUBS_IMAGE=ghcr.io/ccu-ukn/pubdex:0.1.0@sha256:24d570015b20f222c767a8bb89dd18d792abbd25cc730137f7b8bc285df6a325' > .env
+echo 'PEOPLE_PUBS_POSTGRES_IMAGE=ghcr.io/ccu-ukn/pubdex-postgres:0.1.0@sha256:33988fb179e2065e653ad7813cecf812c21f4381537b8b8db546ad37236b780a' >> .env
 ```
 
 To check a release before relying on it, run in a clone, at any time:
 
 ```bash
 ./run_stack_acceptance.sh --release --pull \
-  --image ghcr.io/ccu-ukn/pubdex:<version>@sha256:<digest> \
-  --postgres-image ghcr.io/ccu-ukn/pubdex-postgres:<version>@sha256:<postgres digest> \
-  --expect-version <version> --expect-revision <commit>
+  --image ghcr.io/ccu-ukn/pubdex:0.1.0@sha256:24d570015b20f222c767a8bb89dd18d792abbd25cc730137f7b8bc285df6a325 \
+  --postgres-image ghcr.io/ccu-ukn/pubdex-postgres:0.1.0@sha256:33988fb179e2065e653ad7813cecf812c21f4381537b8b8db546ad37236b780a \
+  --expect-version 0.1.0 --expect-revision 57a72dc9f27766007b51c3d16ac7aa8c6ff3798b
 ```
 
 ## What identifies a deployment
