@@ -1,0 +1,4 @@
+# The chart's defaults with the one value they leave to the operator: the
+# name of the Secret with the database credentials.
+secrets:
+  name: pubdex-credentials

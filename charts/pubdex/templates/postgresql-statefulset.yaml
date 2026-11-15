@@ -1,0 +1,191 @@
+{{- /*
+Evaluation mode: PostgreSQL 16 from the release's PostgreSQL image, one
+replica, with a volume of its own. It runs as the image's postgres user,
+uid and gid 999, under Pod Security "restricted": read-only root, no
+capabilities, writable directories on emptyDir volumes only.
+
+Before the server starts, the init container bootstrap -- compose.yaml's
+bootstrap service -- copies the schema bootstrap the application image
+carries into the emptyDir initdb, which the server mounts read-only at
+/docker-entrypoint-initdb.d. The image's entrypoint runs those files once,
+when the data directory is empty: the schema, then the passwords of the
+application roles from the Secret files. A volume with data is never
+initialised again, so a restart, a new pod or another image changes no
+schema, data or password.
+*/ -}}
+{{- if eq .Values.mode "evaluation" }}
+{{- $secretDir := include "pubdex.secretDir" . }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "pubdex.postgresqlName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pubdex.labels" (dict "root" $ "component" "postgresql") | nindent 4 }}
+spec:
+  serviceName: {{ include "pubdex.postgresqlName" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "pubdex.selectorLabels" (dict "root" $ "component" "postgresql") | nindent 6 }}
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: {{ ternary "Retain" "Delete" .Values.postgresql.persistence.retainOnUninstall }}
+    whenScaled: Retain
+  template:
+    metadata:
+      labels:
+        {{- include "pubdex.labels" (dict "root" $ "component" "postgresql") | nindent 8 }}
+        {{- with include "pubdex.podLabels" (dict "root" $ "component" "postgresql") }}{{ . | nindent 8 }}{{ end }}
+      {{- with include "pubdex.podAnnotations" (dict "root" $ "component" "postgresql") }}
+      annotations:
+        {{- . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "pubdex.postgresqlName" . }}
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with include "pubdex.podScheduling" (dict "root" $ "component" "postgresql") }}{{ . | nindent 6 }}{{ end }}
+      # The image's stop signal, SIGINT, makes PostgreSQL shut down fast:
+      # it ends open sessions and writes a checkpoint, so the next start
+      # needs no crash recovery. This is the time it gets before a kill.
+      terminationGracePeriodSeconds: {{ .Values.postgresql.terminationGracePeriodSeconds | int64 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        # The volumes' group: the data volume and the Secret files become
+        # accessible to the group 999. OnRootMismatch skips the recursive
+        # pass over the data once the volume's root has that group.
+        fsGroup: 999
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: bootstrap
+          image: {{ include "pubdex.image" .Values.image | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python", "-m", "people_pubs.bootstrap", "/var/lib/pubdex/initdb"]
+          securityContext:
+            runAsUser: 10001
+            runAsGroup: 10001
+            {{- include "pubdex.containerSecurityContext" . | nindent 12 }}
+          {{- with .Values.postgresql.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: initdb
+              mountPath: /var/lib/pubdex/initdb
+            - name: tmp
+              mountPath: /tmp
+      containers:
+        - name: postgresql
+          image: {{ include "pubdex.image" .Values.postgresImage | quote }}
+          imagePullPolicy: {{ .Values.postgresImage.pullPolicy }}
+          ports:
+            - name: postgresql
+              containerPort: 5432
+              protocol: TCP
+          env:
+            # A subdirectory of the volume, so that a lost+found directory
+            # at the volume's root does not stop the initialisation.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+            - name: POSTGRES_DB
+              value: {{ .Values.database.name | quote }}
+            - name: POSTGRES_USER
+              value: postgres
+            - name: POSTGRES_PASSWORD_FILE
+              value: {{ printf "%s/postgres_password" $secretDir }}
+            # Read by 020_role_passwords.sh of the schema bootstrap during
+            # the first initialisation only.
+            - name: PEOPLE_PUBS_APP_READONLY_PASSWORD_FILE
+              value: {{ printf "%s/app_readonly_password" $secretDir }}
+            - name: PEOPLE_PUBS_APP_WRITER_PASSWORD_FILE
+              value: {{ printf "%s/app_writer_password" $secretDir }}
+          securityContext:
+            {{- include "pubdex.containerSecurityContext" . | nindent 12 }}
+          # The first start initialises the database before the server
+          # listens on TCP; up to five minutes.
+          startupProbe:
+            exec:
+              command:
+                {{- include "pubdex.postgresqlReadyCommand" . | nindent 16 }}
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            exec:
+              command:
+                {{- include "pubdex.postgresqlReadyCommand" . | nindent 16 }}
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-q", "-h", "127.0.0.1", "-p", "5432"]
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          {{- with .Values.postgresql.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: initdb
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+            - name: secrets
+              mountPath: {{ $secretDir }}
+              readOnly: true
+            - name: run
+              mountPath: /var/run/postgresql
+            - name: tmp
+              mountPath: /tmp
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        - name: initdb
+          emptyDir: {}
+        - name: run
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: {{ .Values.postgresql.shmSize | quote }}
+        # The superuser's and both application roles' passwords, which the
+        # first initialisation reads; readable by the group 999 only.
+        - name: secrets
+          secret:
+            secretName: {{ include "pubdex.secretName" . | quote }}
+            defaultMode: 0440
+            items:
+              - key: postgres_password
+                path: postgres_password
+              - key: app_readonly_password
+                path: app_readonly_password
+              - key: app_writer_password
+                path: app_writer_password
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "pubdex.selectorLabels" (dict "root" $ "component" "postgresql") | nindent 10 }}
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        {{- with .Values.postgresql.persistence.storageClass }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.postgresql.persistence.size | quote }}
+{{- end }}

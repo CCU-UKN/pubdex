@@ -1,0 +1,114 @@
+{{- /*
+The read service, as app_readonly, with that role's password file and no
+other credential. It runs as the image's user, uid and gid 10001, under Pod
+Security "restricted", with a read-only root and a private /tmp. In external
+mode with a CA certificate it also mounts that certificate, which its
+connection string names as sslrootcert.
+*/ -}}
+{{- $secretDir := include "pubdex.secretDir" . }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "pubdex.apiName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pubdex.labels" (dict "root" $ "component" "api") | nindent 4 }}
+spec:
+  replicas: {{ .Values.api.replicas | int64 }}
+  selector:
+    matchLabels:
+      {{- include "pubdex.selectorLabels" (dict "root" $ "component" "api") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "pubdex.labels" (dict "root" $ "component" "api") | nindent 8 }}
+        {{- with include "pubdex.podLabels" (dict "root" $ "component" "api") }}{{ . | nindent 8 }}{{ end }}
+      annotations:
+        # A changed setting rolls the pods on helm upgrade.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with include "pubdex.podAnnotations" (dict "root" $ "component" "api") }}{{ . | nindent 8 }}{{ end }}
+    spec:
+      serviceAccountName: {{ include "pubdex.apiName" . }}
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with include "pubdex.podScheduling" (dict "root" $ "component" "api") }}{{ . | nindent 6 }}{{ end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api
+          image: {{ include "pubdex.image" .Values.image | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python", "-m", "people_pubs.api"]
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          env:
+            {{- range list "PEOPLE_PUBS_API_DSN" "PEOPLE_PUBS_API_LOG_LEVEL" "PEOPLE_PUBS_API_POOL_SIZE" "PEOPLE_PUBS_API_DB_WAIT_SECONDS" "PEOPLE_PUBS_API_STATEMENT_TIMEOUT_MS" }}
+            - name: {{ . }}
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "pubdex.configName" $ }}
+                  key: {{ . }}
+            {{- end }}
+            - name: PEOPLE_PUBS_API_DB_PASSWORD_FILE
+              value: {{ printf "%s/app_readonly_password" $secretDir }}
+          securityContext:
+            {{- include "pubdex.containerSecurityContext" . | nindent 12 }}
+          # Live: the process answers, whatever the database does.
+          startupProbe:
+            httpGet:
+              path: /livez
+              port: http
+            periodSeconds: 2
+            timeoutSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          # Ready: a database connection within dbWaitSeconds and the
+          # snapshot readable. Not ready while the database is not; ready
+          # again once it is, without a restart.
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: {{ add (.Values.api.dbWaitSeconds | int64) 2 }}
+            failureThreshold: 3
+          {{- with .Values.api.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: secrets
+              mountPath: {{ $secretDir }}
+              readOnly: true
+            {{- with include "pubdex.caMount" . }}{{ . | nindent 12 }}{{ end }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        # app_readonly's password only, readable by the group 10001 only.
+        - name: secrets
+          secret:
+            secretName: {{ include "pubdex.secretName" . | quote }}
+            defaultMode: 0440
+            items:
+              - key: app_readonly_password
+                path: app_readonly_password
+        {{- with include "pubdex.caVolume" . }}{{ . | nindent 8 }}{{ end }}

@@ -4,7 +4,8 @@ The real script runs from a scratch copy of the repository layout in which
 every stage is a stub that records its name, arguments and working directory,
 and fails or runs slowly when asked to. Stub `docker` and `git` executables
 stand in for the real ones; the stub `docker` reports an Engine and a Compose
-version, so that the version requirements can be checked. This pins, without Docker, the stage order, that
+version, so that the version requirements can be checked, and a stub file
+stands where the pinned helm belongs. This pins, without Docker, the stage order, that
 the first failure stops the run with its own status, how --base/--head reach
 the transform-version guard and the check of the range's commits (the
 all-zero and empty first-push forms included), the prerequisite diagnostics,
@@ -40,8 +41,18 @@ STAGES = {
     "integration": "DB/run_disposable_integration.sh",
     "stack": "run_stack_acceptance.sh",
     "operator": "run_operator_acceptance.sh",
+    "charts": "run_chart_checks.sh",
+    "cluster": "run_cluster_acceptance.sh",
 }
 ORDER = list(STAGES)
+COUNT = len(STAGES)
+# Where the pinned tools belong (cluster_tool_path in DB/lib/cluster_tools.sh).
+TOOL_VERSIONS = {tool: re.search(rf"^readonly PINNED_{tool.upper()}_VERSION=(\S+)$",
+                                 (ROOT / "DB" / "lib" / "cluster_tools.sh").read_text(encoding="utf-8"), re.M).group(1)
+                 for tool in ("helm", "kubectl", "kind")}
+TOOLS = {tool: Path(".tools") / f"{tool}-{version}" / tool for tool, version in TOOL_VERSIONS.items()}
+HELM_VERSION = TOOL_VERSIONS["helm"]
+HELM = TOOLS["helm"]
 
 STUB_STAGE = r'''#!/usr/bin/env bash
 name="@NAME@"
@@ -97,6 +108,10 @@ class Fake:
         shutil.copy2(SUITE, self.script)
         (self.root / "DB" / "lib").mkdir(parents=True)
         shutil.copy2(ROOT / "DB" / "lib" / "docker_versions.sh", self.root / "DB" / "lib")
+        shutil.copy2(ROOT / "DB" / "lib" / "cluster_tools.sh", self.root / "DB" / "lib")
+        # The suite only looks for them; stages 8 and 9 check their hashes and versions.
+        for relative in TOOLS.values():
+            _executable(self.root / relative, "#!/bin/sh\nexit 1\n")
         for name, relative in STAGES.items():
             _executable(self.root / relative, STUB_STAGE.replace("@NAME@", name))
         self.python = self.root / ".venv" / "bin" / "python"
@@ -159,8 +174,8 @@ def test_stages_run_in_order_from_any_directory(tmp_path: Path) -> None:
     assert fake.names() == ORDER
     assert all(call[1:] == [] for call in fake.calls()), "no stage gets arguments without a range"
     headers = [line for line in proc.stdout.splitlines() if line.startswith("==> Stage ") and "passed" not in line]
-    assert [h.split(":")[0] for h in headers] == [f"==> Stage {n}/7" for n in range(1, 8)]
-    assert "PASS: all 7 stages" in proc.stdout
+    assert [h.split(":")[0] for h in headers] == [f"==> Stage {n}/{COUNT}" for n in range(1, COUNT + 1)]
+    assert COUNT == 9 and f"PASS: all {COUNT} stages" in proc.stdout
     for context in fake.lines(".context"):
         _name, cwd = context.split("\t")
         assert Path(cwd).resolve() == fake.root.resolve(), "stages run from the repository root"
@@ -178,7 +193,7 @@ def test_the_first_failure_stops_the_run_with_its_status(tmp_path: Path, failing
     assert proc.returncode == 7
     position = ORDER.index(failing)
     assert fake.names() == ORDER[: position + 1], "no later stage starts"
-    assert f"stage {position + 1}/7" in proc.stderr and "failed with exit status 7" in proc.stderr
+    assert f"stage {position + 1}/{COUNT}" in proc.stderr and "failed with exit status 7" in proc.stderr
     assert "later stages were not run" in proc.stderr
     assert "PASS" not in proc.stdout
 
@@ -302,6 +317,21 @@ def test_prerequisite_diagnostics(tmp_path: Path) -> None:
     assert "Remove .venv and create it again with:" in proc.stderr and "./setup_venv.sh" in proc.stderr
     assert "pip install" not in proc.stderr and "install_pip.py" not in proc.stderr
 
+    # The pinned tools are looked for before any stage runs, not once seven
+    # or eight stages have passed.
+    for tool in ("kind", "kubectl"):
+        (fake.root / TOOLS[tool]).unlink()
+        proc = fake.run()
+        assert proc.returncode == 1 and f"the pinned {tool} {TOOL_VERSIONS[tool]} is not installed" in proc.stderr
+        assert "stage 9 tests the Helm chart on a disposable kind cluster with it" in proc.stderr
+        assert _hint(proc.stderr) == ["./setup_cluster_tools.sh"]
+        _executable(fake.root / TOOLS[tool], "#!/bin/sh\nexit 1\n")
+    (fake.root / HELM).unlink()
+    proc = fake.run()
+    assert proc.returncode == 1 and f"the pinned helm {HELM_VERSION} is not installed" in proc.stderr
+    assert "stage 8 checks the Helm chart with it" in proc.stderr
+    assert _hint(proc.stderr) == ["./setup_cluster_tools.sh"]
+
     fake.python.unlink()
     proc = fake.run()
     assert proc.returncode == 1 and "./setup_venv.sh" in proc.stderr
@@ -318,7 +348,7 @@ def test_prerequisite_diagnostics(tmp_path: Path) -> None:
 # The scripts that need .venv say so when it is missing, and the
 # documentation gives the same command.
 FRESH_SETUP = ["./setup_venv.sh"]
-VENV_HINTS = ["run_checks.sh", "DB/run_task_1a_demo.sh", "DB/run_disposable_integration.sh"]
+VENV_HINTS = ["run_checks.sh", "DB/run_task_1a_demo.sh", "DB/run_disposable_integration.sh", "run_chart_checks.sh"]
 SETUP_DOCUMENTS = ["README.md", "QUICKSTART.md", "DB/README.md", "DB/TESTING_STRATEGY.md",
                    ".github/workflows/db-tests.yml", ".forgejo/workflows/db-tests.yml",
                    "run_ci_suite.sh", *VENV_HINTS]
@@ -380,10 +410,10 @@ def test_setup_venv_passes_its_choices_on_and_refuses_an_existing_venv(tmp_path:
 
 
 def _hint(stderr: str) -> list:
-    """The commands a missing-interpreter message gives: the indented lines
-    after the one that says how to create .venv."""
+    """The commands a message for a missing prerequisite gives: the indented
+    lines after the one that says how to create or install it."""
     lines = stderr.splitlines()
-    start = next(index for index, line in enumerate(lines) if line.endswith("Create it from the repository root with:"))
+    start = next(index for index, line in enumerate(lines) if line.endswith(" it from the repository root with:"))
     commands = []
     for line in lines[start + 1:]:
         if not line.startswith("  "):
@@ -493,6 +523,7 @@ def test_the_gitlab_example_installs_the_requirements_and_hands_the_suite_its_ra
     checkout, log = tmp_path / "checkout", tmp_path / "calls.log"
     _executable(checkout / "run_ci_suite.sh", f'#!/bin/sh\necho "suite $*" >> "{log}"\n')
     _executable(checkout / "setup_venv.sh", f'#!/bin/sh\necho "setup $*" >> "{log}"\n')
+    _executable(checkout / "setup_cluster_tools.sh", f'#!/bin/sh\necho "tools $*" >> "{log}"\n')
     environment = {key: value for key, value in os.environ.items() if not key.startswith("CI_")}
     environment.update(variables, CI_COMMIT_SHA=HEAD_SHA)
     # As a shell executor runs them: Bash, stopping at the first failure.
@@ -502,6 +533,7 @@ def test_the_gitlab_example_installs_the_requirements_and_hands_the_suite_its_ra
     assert proc.returncode == 0, proc.stderr
     assert log.read_text(encoding="utf-8").splitlines() == [
         "setup --python python3.11",
+        "tools ",
         f"suite --base {base} --head {HEAD_SHA}",
     ]
 
@@ -512,10 +544,12 @@ def test_public_ci_is_only_an_adapter_around_the_suite() -> None:
     steps = "\n".join(code)
     assert './run_ci_suite.sh --base "$BASE" --head "$HEAD"' in steps
     assert "./setup_venv.sh --python python" in steps
+    assert "run: ./setup_cluster_tools.sh\n" in steps
     for forbidden in ("pytest", "docker", "psql", "postgres", "services:", "secrets.", "pip install", "-m venv",
                       "install_pip", "install_locked", "fetch_verified",
                       "run_checks.sh", "run_integration_tests", "run_migration_smoke", "run_task_1a_demo",
-                      "run_stack_acceptance", "build_image", "create_secrets"):
+                      "run_stack_acceptance", "build_image", "create_secrets", "helm", "kubectl", "run_chart_checks",
+                      "run_cluster_acceptance"):
         assert forbidden not in steps, f"{forbidden!r} belongs in a tracked script, not in the workflow"
     assert "contents: read" in steps
     assert "fetch-depth: 0" in steps
@@ -613,6 +647,7 @@ def test_each_ci_adapter_installs_the_requirements_and_hands_the_suite_its_event
     checkout, log = tmp_path / "checkout", tmp_path / "calls.log"
     _executable(checkout / "run_ci_suite.sh", f'#!/bin/sh\necho "suite $*" >> "{log}"\n')
     _executable(checkout / "setup_venv.sh", f'#!/bin/sh\necho "setup $*" >> "{log}"\n')
+    _executable(checkout / "setup_cluster_tools.sh", f'#!/bin/sh\necho "tools $*" >> "{log}"\n')
     environment = {key: value for key, value in os.environ.items() if key not in variables}
     environment.update(variables)
     # As both runners execute run steps: Bash, stopping at the first failure.
@@ -620,7 +655,7 @@ def test_each_ci_adapter_installs_the_requirements_and_hands_the_suite_its_event
                           capture_output=True, text=True, timeout=60)
     assert proc.returncode == 0, proc.stderr
     calls = log.read_text(encoding="utf-8").splitlines()
-    assert calls == [f"setup --python {interpreter}", f"suite --base {base} --head {head}"]
+    assert calls == [f"setup --python {interpreter}", "tools ", f"suite --base {base} --head {head}"]
 
 
 def test_the_forgejo_adapter_runs_on_a_host_runner_with_forgejo_hosted_actions() -> None:
@@ -629,10 +664,12 @@ def test_the_forgejo_adapter_runs_on_a_host_runner_with_forgejo_hosted_actions()
     # The same thin adapter as on GitHub ...
     assert './run_ci_suite.sh --base "$BASE" --head "$HEAD"' in code
     assert "./setup_venv.sh --python python3.11" in code
+    assert "run: ./setup_cluster_tools.sh\n" in code
     for forbidden in ("pytest", "docker", "psql", "postgres", "services:", "secrets.", "pip install", "-m venv",
                       "install_pip", "install_locked", "fetch_verified",
                       "run_checks.sh", "run_integration_tests", "run_migration_smoke", "run_task_1a_demo",
-                      "run_stack_acceptance", "build_image", "create_secrets"):
+                      "run_stack_acceptance", "build_image", "create_secrets", "helm", "kubectl", "run_chart_checks",
+                      "run_cluster_acceptance"):
         assert forbidden not in code, f"{forbidden!r} belongs in a tracked script, not in the workflow"
     assert "fetch-depth: 0" in code and "persist-credentials: false" in code and "timeout-minutes:" in code
     # ... for a runner that runs the job on its host, under the label the
@@ -652,3 +689,14 @@ def test_the_forgejo_adapter_runs_on_a_host_runner_with_forgejo_hosted_actions()
         return checkout.group(1), setup.group(1)
 
     assert pins(github) == pins(forgejo)
+
+    # Both give the job the same time limit, set for the nine-stage suite, and
+    # the description of the Forgejo job states that limit.
+    def limit(text: str) -> str:
+        limits = re.findall(r"^    timeout-minutes: (\d+)$", text, re.M)
+        assert len(limits) == 1, limits
+        return limits[0]
+
+    assert limit(github) == limit(forgejo)
+    strategy = " ".join((ROOT / "DB" / "TESTING_STRATEGY.md").read_text(encoding="utf-8").split())
+    assert f"under a {limit(github)}-minute limit: the same three steps and the same limit as on GitHub" in strategy

@@ -1,0 +1,20 @@
+{{- /*
+The read service inside the cluster. It has no authentication and no TLS:
+every pod that can reach this Service can read everything it serves.
+*/ -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "pubdex.apiName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pubdex.labels" (dict "root" $ "component" "api") | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "pubdex.selectorLabels" (dict "root" $ "component" "api") | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.api.service.port | int64 }}
+      targetPort: http
+      protocol: TCP

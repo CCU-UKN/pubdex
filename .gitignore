@@ -39,4 +39,7 @@ DB/*.log
 
 # The Compose deployment's secret files (create_secrets.sh)
 /secrets/
+
+# The pinned helm, kubectl and kind (setup_cluster_tools.sh)
+/.tools/
 .vscode/settings.json

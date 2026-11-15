@@ -178,6 +178,14 @@ def _executable(path: Path, text: str) -> None:
     path.chmod(0o755)
 
 
+def _finished_lines(path: Path) -> list:
+    """The lines the stubs have finished writing. The tests poll the log while
+    the run goes on, and a stub writes a line in several parts, so the last
+    line may still lack its newline."""
+    data = path.read_bytes()
+    return data[:data.rfind(b"\n") + 1].decode("utf-8").splitlines()
+
+
 class Fake:
     """A scratch checkout holding the real script, stubs and a fake init/."""
 
@@ -237,7 +245,7 @@ class Fake:
     def events_list(self) -> list:
         if not self.events.exists():
             return []
-        return [line.split("\x1f") for line in self.events.read_text(encoding="utf-8").splitlines()]
+        return [line.split("\x1f") for line in _finished_lines(self.events)]
 
     def argvs(self) -> list:
         return [event[1:] for event in self.events_list() if event[0] == "docker"]

@@ -1,0 +1,39 @@
+{{- /*
+The release's settings that are not secret, one key per environment
+variable. Each container takes the keys it needs by name. The pods that use
+them carry a checksum of this file, so a changed setting rolls them on the
+next helm upgrade. No connection setting names a password: each container
+reads its role's password from its Secret file.
+
+The read service connects with PEOPLE_PUBS_API_DSN as app_readonly. The
+ingestion commands connect as app_writer through libpq's own variables, as
+in compose.yaml: PGHOST, PGPORT, PGDATABASE and PGUSER, in external mode
+also PGSSLMODE and, with a CA certificate, PGSSLROOTCERT, whose file only a
+container that mounts the CA certificate (pubdex.caMount) has.
+*/ -}}
+{{- include "pubdex.checkValues" . }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "pubdex.configName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pubdex.labels" (dict "root" $ "component" "") | nindent 4 }}
+data:
+  PEOPLE_PUBS_API_DSN: {{ include "pubdex.connectionString" (dict "root" . "user" "app_readonly") | quote }}
+  PEOPLE_PUBS_API_LOG_LEVEL: {{ .Values.api.logLevel | quote }}
+  PEOPLE_PUBS_API_POOL_SIZE: {{ .Values.api.poolSize | int64 | toString | quote }}
+  PEOPLE_PUBS_API_DB_WAIT_SECONDS: {{ .Values.api.dbWaitSeconds | int64 | toString | quote }}
+  PEOPLE_PUBS_API_STATEMENT_TIMEOUT_MS: {{ .Values.api.statementTimeoutMs | int64 | toString | quote }}
+  PEOPLE_PUBS_CROSSREF_MAILTO: {{ .Values.ingestion.crossrefMailto | quote }}
+  PEOPLE_PUBS_ORG_PATTERNS: {{ .Values.ingestion.orgPatterns | quote }}
+  PGHOST: {{ include "pubdex.databaseHost" . | quote }}
+  PGPORT: {{ include "pubdex.databasePort" . | quote }}
+  PGDATABASE: {{ .Values.database.name | quote }}
+  PGUSER: "app_writer"
+  {{- if eq .Values.mode "external" }}
+  PGSSLMODE: {{ .Values.externalDatabase.sslmode | quote }}
+  {{- with include "pubdex.sslRootCert" . }}
+  PGSSLROOTCERT: {{ . | quote }}
+  {{- end }}
+  {{- end }}

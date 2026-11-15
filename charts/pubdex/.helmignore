@@ -1,0 +1,13 @@
+# Files in this directory that do not belong in a packaged chart.
+.DS_Store
+.git/
+.gitignore
+.vscode/
+.idea/
+*.swp
+*.bak
+*.tmp
+*.orig
+*~
+__pycache__/
+*.pyc

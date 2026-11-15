@@ -24,7 +24,26 @@
 #      the stack configured by an .env file on the ordinary network, a private
 #      roster on standard input, ingestion of the bundled payloads, refresh,
 #      read service and export, and both documented ways of changing the
-#      application roles' passwords.
+#      application roles' passwords;
+#   8. the offline checks of the Helm chart (run_chart_checks.sh), with the
+#      pinned helm and no cluster: helm lint --strict, the chart rendered for
+#      each values file of the checks and each example, assertions on the
+#      manifests, and the values it has to refuse;
+#   9. the Helm chart on a disposable Kubernetes cluster
+#      (run_cluster_acceptance.sh): a kind cluster of its own, on a Docker
+#      network of its own and with a kubeconfig of its own, the images built
+#      from this checkout loaded into it and the published images pulled into
+#      it, and the chart in both modes -- evaluation mode with the synthetic
+#      demonstration, and external mode against a PostgreSQL server of the
+#      run's own with TLS -- installed with the published images, read back
+#      over HTTP, tested with helm test, upgraded to the images built here
+#      with other values, given new passwords and uninstalled; the
+#      evaluation release is also rolled back, loses and regains its
+#      database, and has its NetworkPolicy observed, and the external
+#      release has a routine upgrade and a rollback; then, on a second kind
+#      cluster of the oldest supported Kubernetes release, a user holding
+#      only the rights KUBERNETES.md lists runs evaluation mode's lifecycle,
+#      the kubelet pulling the published images.
 #
 # Only synthetic fixtures and disposable databases are used. Stages 3-5 each
 # start their own uniquely named and labelled PostgreSQL container and volume,
@@ -39,13 +58,19 @@
 # and runs only commands that contact no metadata provider. Only stages 6 and
 # 7 use Docker Compose: stage 6 with its project's explicit name, files and
 # settings, stage 7 with a synthetic .env file of its own in a directory of
-# its own. No stage connects to an existing database or a metadata provider,
-# and in
-# the pytest runs of stages 1 and 5 a network guard refuses any other network
+# its own. Stage 8 runs helm with a cleared environment in a temporary
+# directory of its own, reads no kubeconfig and contacts no cluster. Stage 9
+# creates its kind cluster, network and image tags under names of the run's
+# own, runs every helm and kubectl call with a cleared environment against
+# the kubeconfig kind wrote into its temporary directory, after checking that
+# it names that cluster's loopback port alone, and deletes all of it again,
+# confirmed as in stages 6 and 7. No stage
+# connects to an existing database or a metadata provider, and in
+# the pytest runs of stages 1, 5 and 8 a network guard refuses any other network
 # access by the tests and the Python processes they start (a guard inside
 # Python, not network isolation; see DB/TESTING_STRATEGY.md for its
-# boundaries). No stage reads DB/.env: the stage-1 tests run in a
-# cleared environment (DB/run_tests.sh), and they and every Python step of
+# boundaries). No stage reads DB/.env: the tests of stages 1 and 8 run in a
+# cleared environment (DB/run_tests.sh, run_chart_checks.sh), and they and every Python step of
 # stages 4 and 5 run with PEOPLE_PUBS_SKIP_DOTENV=1; the image of stages 6
 # and 7 reads no .env file at all. This script creates
 # nothing itself, so it has nothing of its own to clean up. An interrupt from
@@ -53,14 +78,18 @@
 # which cleans up at once; a signal sent to this script alone takes effect when
 # the running stage returns, and no later stage starts.
 #
-# Needs Bash, a Git checkout, .venv with DB/requirements-dev.txt installed and,
-# for stages 3-7, a Docker Engine 28.0.1 or later, except 28.2.0 to 28.3.2, with
+# Needs Bash, a Git checkout, .venv with DB/requirements-dev.txt installed, for
+# stages 8 and 9 the pinned helm, kubectl and kind that ./setup_cluster_tools.sh
+# installs under .tools/, Linux on x86_64 for stage 9, and, for stages 3-7 and
+# 9, a Docker Engine 28.0.1 or later, except 28.2.0 to 28.3.2, with
 # the Compose plugin 2.24.0 or later (DB/lib/docker_versions.sh says why), which
 # this user can reach and which runs on the same machine: stages 3-5
 # bind-mount DB/init/ from this checkout, stages 6 and 7 files from the
 # temporary directory, and they publish PostgreSQL and the read service on 127.0.0.1
-# (DB/TESTING_STRATEGY.md, "Running the suite elsewhere"). Stages 6 and 7
-# need network access to build the image unless Docker has its inputs cached.
+# (DB/TESTING_STRATEGY.md, "Running the suite elsewhere"). Stages 6, 7 and 9
+# need network access to build the image, and stage 9 kind's two node images,
+# unless Docker has them cached; stage 9 also needs openssl, and its clusters
+# pull the published images from their registry without credentials.
 # ./run_checks.sh remains the fast offline command for pre-commit and everyday
 # use.
 #
@@ -71,9 +100,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 PYTHON="$ROOT/.venv/bin/python"
-STAGES=7
+STAGES=9
 # shellcheck source=DB/lib/docker_versions.sh
 source "$ROOT/DB/lib/docker_versions.sh"
+# shellcheck source=DB/lib/cluster_tools.sh
+source "$ROOT/DB/lib/cluster_tools.sh"
 
 usage() {
   cat <<'USAGE'
@@ -89,6 +120,8 @@ with that stage's exit status:
   5. integration suite on disposable PostgreSQL   DB/run_disposable_integration.sh
   6. Compose deployment acceptance                run_stack_acceptance.sh
   7. operator workflow on the deployment          run_operator_acceptance.sh
+  8. offline checks of the Helm chart             run_chart_checks.sh
+  9. Helm chart on a disposable kind cluster      run_cluster_acceptance.sh
 
   --base <sha> [--head <sha>]  also check this commit range (--head defaults
                                to HEAD): the transform-version guard in stage 1
@@ -100,9 +133,11 @@ with that stage's exit status:
                                read every commit reachable from the head.
   -h, --help                   show this help
 
-Needs a Git checkout, .venv with DB/requirements-dev.txt installed, and a
-reachable Docker Engine 28.0.1 or later, except 28.2.0 to 28.3.2, with the
-Compose plugin 2.24.0 or later. ./run_checks.sh alone runs the offline part.
+Needs a Git checkout, .venv with DB/requirements-dev.txt installed, the
+pinned helm, kubectl and kind (./setup_cluster_tools.sh), and a reachable
+Docker Engine 28.0.1 or later, except 28.2.0 to 28.3.2, with the Compose
+plugin 2.24.0 or later; stage 9 runs on Linux on x86_64 only.
+./run_checks.sh alone runs the offline part.
 USAGE
 }
 
@@ -181,8 +216,21 @@ fi
 if ! git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   missing "this directory is not a Git checkout; run the suite in a clone of the repository."
 fi
+# Stage 8 checks the helm it finds here against its pinned hash and version.
+if [ ! -x "$(cluster_tool_path "$ROOT" helm)" ]; then
+  missing "the pinned helm $PINNED_HELM_VERSION is not installed under .tools/; stage 8 checks the Helm chart with it. Install it from the repository root with:" \
+    "./setup_cluster_tools.sh"
+fi
+# Stage 9 checks kubectl and kind as stage 8 checks helm.
+for tool in kubectl kind; do
+  version_name="PINNED_${tool^^}_VERSION"
+  if [ ! -x "$(cluster_tool_path "$ROOT" "$tool")" ]; then
+    missing "the pinned $tool ${!version_name} is not installed under .tools/; stage 9 tests the Helm chart on a disposable kind cluster with it. Install it from the repository root with:" \
+      "./setup_cluster_tools.sh"
+  fi
+done
 if ! command -v docker >/dev/null 2>&1; then
-  missing "docker was not found on PATH. Stages 3-7 start disposable containers." \
+  missing "docker was not found on PATH. Stages 3-7 and 9 start disposable containers." \
     "Install Docker Engine, or run ./run_checks.sh for the offline part alone."
 fi
 if ! docker info >/dev/null 2>&1; then
@@ -192,7 +240,7 @@ fi
 engine_version="$(docker version --format '{{.Server.Version}}' 2>/dev/null)" || engine_version=""
 problem="$(engine_problem "$engine_version")"
 if [ -n "$problem" ]; then
-  missing "$problem: stages 6 and 7 build the application image and start the deployment," \
+  missing "$problem: stages 6, 7 and 9 build the application image and start the deployment," \
     "which need Docker Engine $ENGINE_SUPPORTED: other Engines start it too, but can let other hosts" \
     "reach the ports it publishes on 127.0.0.1 (DB/lib/docker_versions.sh says why)." \
     "Upgrade the engine, or run the stages before them on their own."
@@ -263,6 +311,10 @@ run_stage 6 "Compose deployment acceptance (run_stack_acceptance.sh)" \
   bash "$ROOT/run_stack_acceptance.sh"
 run_stage 7 "operator workflow on the Compose deployment (run_operator_acceptance.sh)" \
   bash "$ROOT/run_operator_acceptance.sh"
+run_stage 8 "offline checks of the Helm chart (run_chart_checks.sh)" \
+  bash "$ROOT/run_chart_checks.sh"
+run_stage 9 "Helm chart on a disposable kind cluster (run_cluster_acceptance.sh)" \
+  bash "$ROOT/run_cluster_acceptance.sh"
 
 echo
 echo "PASS: all $STAGES stages of the complete verification suite passed in $((SECONDS - suite_started))s."

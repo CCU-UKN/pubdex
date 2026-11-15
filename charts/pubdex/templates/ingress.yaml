@@ -1,0 +1,49 @@
+{{- /*
+An Ingress for the read service, ingress.enabled. The read service has no
+authentication: the Ingress publishes everything it serves to everyone who
+can reach its hosts. Each host's paths lead to Service <release>-api. With
+networkPolicy.enabled the ingress controller's pods also have to be among
+networkPolicy.api.allowFrom, or the read service does not admit them.
+*/ -}}
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "pubdex.apiName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pubdex.labels" (dict "root" $ "component" "api") | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.ingress.tls }}
+  tls:
+    {{- range . }}
+    - secretName: {{ .secretName | quote }}
+      hosts:
+        {{- range .hosts }}
+        - {{ . | quote }}
+        {{- end }}
+    {{- end }}
+  {{- end }}
+  rules:
+    {{- range .Values.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range (.paths | default (list (dict "path" "/" "pathType" "Prefix"))) }}
+          - path: {{ .path | quote }}
+            pathType: {{ .pathType }}
+            backend:
+              service:
+                name: {{ include "pubdex.apiName" $ }}
+                port:
+                  number: {{ $.Values.api.service.port | int64 }}
+          {{- end }}
+    {{- end }}
+{{- end }}

@@ -1,0 +1,90 @@
+{{- /*
+Ingestion: one CronJob per entry of ingestion.tasks, named
+<release>-ingest-<task>. Each run is a Job whose one container runs the
+task's command, python -m people_pubs.sync.<command> [arguments], as
+app_writer with that role's password file and no other credential
+(pubdex.writerPodSecurityContext and the helpers after it).
+
+- Without a schedule the CronJob is suspended and only runs on demand:
+    kubectl create job --from=cronjob/<release>-ingest-<task> <name>
+  Its schedule is then a placeholder, once a year, that a suspended CronJob
+  never uses.
+- A run is not retried (backoffLimit 0) and never starts while the previous
+  run of its task is still going (concurrencyPolicy Forbid): the commands
+  pick up where the last run stopped, so the next run is the retry.
+- The settings come from the release's ConfigMap when a run starts, so a
+  changed setting reaches the next run without a change here.
+- Runs, those started by hand included, belong to their CronJob: the last
+  three of each outcome are kept with their logs, and deleting the CronJob
+  deletes them.
+*/ -}}
+{{- range $task, $spec := .Values.ingestion.tasks }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ printf "%s-%s" (include "pubdex.ingestName" $) $task }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "pubdex.labels" (dict "root" $ "component" "ingest") | nindent 4 }}
+spec:
+  {{- if $spec.schedule }}
+  schedule: {{ $spec.schedule | quote }}
+  suspend: {{ $spec.suspend | default false }}
+  {{- else }}
+  # On demand only.
+  schedule: "0 0 1 1 *"
+  suspend: true
+  {{- end }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    metadata:
+      labels:
+        {{- include "pubdex.labels" (dict "root" $ "component" "ingest") | nindent 8 }}
+    spec:
+      backoffLimit: 0
+      {{- with $spec.activeDeadlineSeconds }}
+      activeDeadlineSeconds: {{ . | int64 }}
+      {{- end }}
+      template:
+        metadata:
+          labels:
+            {{- include "pubdex.labels" (dict "root" $ "component" "ingest") | nindent 12 }}
+            {{- with include "pubdex.podLabels" (dict "root" $ "component" "ingest") }}{{ . | nindent 12 }}{{ end }}
+          {{- with include "pubdex.podAnnotations" (dict "root" $ "component" "ingest") }}
+          annotations:
+            {{- . | nindent 12 }}
+          {{- end }}
+        spec:
+          restartPolicy: Never
+          serviceAccountName: {{ include "pubdex.ingestName" $ }}
+          automountServiceAccountToken: false
+          enableServiceLinks: false
+          {{- with $.Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with include "pubdex.podScheduling" (dict "root" $ "component" "ingest") }}{{ . | nindent 10 }}{{ end }}
+          securityContext:
+            {{- include "pubdex.writerPodSecurityContext" $ | nindent 12 }}
+          containers:
+            - name: ingest
+              image: {{ include "pubdex.image" $.Values.image | quote }}
+              imagePullPolicy: {{ $.Values.image.pullPolicy }}
+              command:
+                {{- toYaml $spec.command | nindent 16 }}
+              env:
+                {{- include "pubdex.writerEnv" $ | nindent 16 }}
+              securityContext:
+                {{- include "pubdex.containerSecurityContext" $ | nindent 16 }}
+              {{- with $.Values.ingestion.resources }}
+              resources:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
+              volumeMounts:
+                {{- include "pubdex.writerVolumeMounts" $ | nindent 16 }}
+          volumes:
+            {{- include "pubdex.writerVolumes" $ | nindent 12 }}
+{{- end }}

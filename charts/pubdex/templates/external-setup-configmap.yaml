@@ -1,0 +1,22 @@
+{{- /*
+External mode: files/external-setup.sh, which the setup Job runs. A hook
+like the Job, so that it exists before the Job of helm install starts; it is
+deleted once the Job has succeeded, and kept after a failure, until the next
+install or upgrade replaces it.
+*/ -}}
+{{- if and (eq .Values.mode "external") .Values.externalDatabase.setup.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "pubdex.setupName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pubdex.labels" (dict "root" $ "component" "setup") | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+data:
+  external-setup.sh: |
+    {{- .Files.Get "files/external-setup.sh" | nindent 4 }}
+{{- end }}

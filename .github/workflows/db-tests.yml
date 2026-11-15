@@ -3,23 +3,31 @@
 # it calls, so the same result is reproducible from a clone and on any other
 # forge: ./setup_venv.sh creates .venv -- the locked files fetched over HTTPS
 # and checked against their hashes, then installed by pip from those files
-# alone, psycopg's C implementation built against the runner's libpq -- then
-# ./run_ci_suite.sh runs. Only the checkout and the interpreter are
-# GitHub-specific here. The Docker-backed stages use the runner's
-# own Docker Engine and Compose plugin -- the last stage builds the
-# application image from this checkout and starts the Compose deployment --
-# and the job needs no service container, registry login or repository
-# secret.
+# alone, psycopg's C implementation built against the runner's libpq --
+# ./setup_cluster_tools.sh installs the helm, kubectl and kind that
+# DB/lib/cluster_tools.sh pins under .tools/, each checked against its pinned
+# SHA-256 and never the runner's own, and then ./run_ci_suite.sh runs its
+# nine stages. Only the checkout and the interpreter are GitHub-specific here.
+# The Docker-backed stages use the runner's own Docker Engine and Compose
+# plugin: stages 6 and 7 build the images from this checkout and start the
+# Compose deployment, and stage 9 builds them again and runs the Helm chart on
+# two kind clusters, one after the other, that it creates on that Engine and
+# deletes afterwards. The
+# job needs no service container, existing cluster, registry login or
+# repository secret.
 #
 # The inputs that would otherwise move are fixed: a runner image release, the
 # actions by commit, an exact Python version, and pip and every package at an
 # exact version and by hash (DB/requirements-pip.txt, DB/requirements-build.txt,
 # then DB/requirements-dev.txt), no package built from source but psycopg-c
 # from its verified archive, and no pip but the locked one run, never with
-# access to an index. The runner image still receives updates -- its
-# compiler and libpq among them -- and the setup's and the suite's logs record
-# the versions each run used (DB/TESTING_STRATEGY.md, "Reproducing a verified
-# run").
+# access to an index; helm, kubectl and kind at an exact version and by
+# SHA-256, and kind's two node images by digest (DB/lib/cluster_tools.sh); the
+# published images that stage 9 installs before it upgrades to this
+# checkout's, by digest (charts/pubdex/values.yaml). The runner image still
+# receives updates -- its compiler, libpq and Docker Engine among them -- and
+# the setup's and the suite's logs record the versions each run used
+# (DB/TESTING_STRATEGY.md, "Reproducing a verified run").
 name: DB tests
 
 on:
@@ -34,7 +42,14 @@ permissions:
 jobs:
   checks:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # The nine stages took about 13.5 minutes on a workstation, about 6 of
+    # them in stage 9 with its two kind clusters. On hosted runners each of
+    # the first seven stages took about as long as on the workstation, apart
+    # from a cold build of the images that added about 3.5 minutes. With
+    # stage 9 taken at 1.5 times its local time, the tool setup and the pulls
+    # of kind's two node images, this job is estimated at about 24 minutes.
+    # The limit is 1.5 times that estimate, rounded up to a multiple of 5.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
@@ -47,6 +62,8 @@ jobs:
           python-version: "3.11.18"
       - name: Install dependencies
         run: ./setup_venv.sh --python python
+      - name: Install the pinned cluster tools
+        run: ./setup_cluster_tools.sh
       - name: Run the complete verification suite
         # On a pull request the base is the target commit; on a push it is the
         # previous tip. The first push of a new branch reports an empty or

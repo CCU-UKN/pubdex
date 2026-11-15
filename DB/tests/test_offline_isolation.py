@@ -7,13 +7,15 @@ run_checks.sh and run_ci_suite.sh from a scratch copy of the checkout in which
 .venv/bin/python is a recorder: every call records its arguments, working
 directory and environment, and succeeds. Started from an environment full of
 database settings, test DSNs, pytest options and an attempt to switch the
-DB/.env opt-out off, the pytest call sees none of them. Stages 2-7 of the
-complete suite, Docker and Git are stubs here.
+DB/.env opt-out off, the pytest call sees none of them. Stages 2-9 of the
+complete suite, Docker, Git and the pinned helm, kubectl and kind are stubs
+here.
 """
 from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -65,14 +67,21 @@ def _executable(path: Path, text: str) -> None:
 
 
 def checkout(tmp_path: Path) -> Path:
-    """The real entry points, a recording interpreter, and stub stages 2-7."""
+    """The real entry points, a recording interpreter, and stub stages 2-9."""
     root = tmp_path / "checkout"
-    for relative in ("run_checks.sh", "run_ci_suite.sh", "DB/run_tests.sh", "DB/lib/docker_versions.sh"):
+    for relative in ("run_checks.sh", "run_ci_suite.sh", "DB/run_tests.sh", "DB/lib/docker_versions.sh",
+                     "DB/lib/cluster_tools.sh"):
         (root / relative).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / relative, root / relative)
     for relative in ("DB/run_migration_smoke.sh", "DB/run_task_1a_demo.sh", "DB/run_disposable_integration.sh",
-                     "run_stack_acceptance.sh", "run_operator_acceptance.sh"):
+                     "run_stack_acceptance.sh", "run_operator_acceptance.sh", "run_chart_checks.sh",
+                     "run_cluster_acceptance.sh"):
         _executable(root / relative, "#!/bin/sh\nexit 0\n")
+    # The suite looks for the pinned tools before any stage runs.
+    for tool in ("helm", "kubectl", "kind"):
+        version = re.search(rf"^readonly PINNED_{tool.upper()}_VERSION=(\S+)$",
+                            (ROOT / "DB/lib/cluster_tools.sh").read_text(encoding="utf-8"), re.M).group(1)
+        _executable(root / ".tools" / f"{tool}-{version}" / tool, "#!/bin/sh\nexit 1\n")
     bindir = root / ".venv" / "bin"
     _executable(bindir / "recorder.py", RECORDER)
     _executable(bindir / "python", f'#!/bin/sh\nexec "{sys.executable}" "{bindir / "recorder.py"}" "$@"\n')
@@ -135,7 +144,7 @@ def test_stage_one_of_the_complete_suite_is_isolated(tmp_path: Path) -> None:
     proc = run([BASH, str(root / "run_ci_suite.sh"), "--base", "abc123", "--head", "def456"],
                polluted(tmp_path), tmp_path)
     assert proc.returncode == 0, proc.stderr
-    assert "PASS: all 7 stages" in proc.stdout
+    assert "PASS: all 9 stages" in proc.stdout
     (call,) = pytest_calls(root)
     assert call["argv"] == ["-m", "pytest"]
     assert_isolated(call["env"])

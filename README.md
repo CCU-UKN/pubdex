@@ -37,6 +37,9 @@ published.
 required, which files carry it, and the command that verifies each part.
 [`TASK_1B.md`](TASK_1B.md) does the same for the second one, the complete test
 suite as one forge-portable command that public CI runs from a clean checkout.
+[`TASK_2A.md`](TASK_2A.md) records the container image and the Compose
+deployment, and [`TASK_2B.md`](TASK_2B.md) the Helm chart and its tests on a
+disposable cluster.
 
 Later funded results will be introduced in their own commits and recorded in
 [`CHANGELOG.md`](CHANGELOG.md) against the task they deliver and the way it
@@ -68,9 +71,13 @@ NLnet project number: 2026-02-585.
 | [`create_secrets.sh`](create_secrets.sh) | Creates the deployment's password files once and never overwrites them |
 | [`set_passwords.sh`](set_passwords.sh) | Gives the running deployment's database the passwords its files hold now, after one was changed, and checks each with a new connection |
 | [`run_checks.sh`](run_checks.sh) | The fast offline check suite: compilation, Markdown consistency and the offline unit and fixture tests, plus the transform-version guard in pre-commit and CI modes. The pre-commit hook, and the first stage of `run_ci_suite.sh` |
-| [`run_ci_suite.sh`](run_ci_suite.sh) | The complete verification suite in one command, and exactly what public CI runs: the offline suite, the check for committed secrets and local configuration, migration from an empty database, the task-1a demonstration, the integration suite on a disposable PostgreSQL, the acceptance test of the Compose deployment, and the test of the operator's workflow on it |
+| [`charts/pubdex/`](charts/pubdex/), [`KUBERNETES.md`](KUBERNETES.md) | The Helm chart, for a Kubernetes cluster: an evaluation mode with a PostgreSQL of its own, or a PostgreSQL server you run, from the same release images; the operator guide covers install, upgrade, rollback and uninstall, Secrets and settings, ingestion, ingress and TLS, and NetworkPolicy. [`charts/tests/`](charts/tests/) holds the chart's offline tests |
+| [`setup_cluster_tools.sh`](setup_cluster_tools.sh) | Installs the helm, kubectl and kind that [`DB/lib/cluster_tools.sh`](DB/lib/cluster_tools.sh) pins under `.tools/`, each checked against its pinned SHA-256, for the Kubernetes checks |
+| [`run_ci_suite.sh`](run_ci_suite.sh) | The complete verification suite in one command, and exactly what public CI runs: the offline suite, the check for committed secrets and local configuration, migration from an empty database, the task-1a demonstration, the integration suite on a disposable PostgreSQL, the acceptance test of the Compose deployment, the test of the operator's workflow on it, the offline checks of the Helm chart, and the chart on a disposable Kubernetes cluster |
 | [`run_stack_acceptance.sh`](run_stack_acceptance.sh) | The acceptance test of the Compose deployment: the image built from the checkout, or a published one, started with `compose.yaml` in a project of its own, a small ingest inside it, the result read over HTTP, readiness, persistence and secrets checked, and everything it created removed |
 | [`run_operator_acceptance.sh`](run_operator_acceptance.sh) | The operator's workflow on the Compose deployment, as `DEPLOYMENT.md` gives it: an `.env` configuration on the ordinary network, a private roster imported on standard input, ingestion of the bundled payloads, refresh, read service and export, password changes with `set_passwords.sh` for files overwritten and replaced, a backup restored into a new stack, and the documented role model, checked by the records and connections they leave |
+| [`run_chart_checks.sh`](run_chart_checks.sh) | The offline checks of the Helm chart with the pinned helm: lint, rendering of every values file and example, and the assertions on the manifests; stage 8 of `run_ci_suite.sh` |
+| [`run_cluster_acceptance.sh`](run_cluster_acceptance.sh) | The Helm chart on disposable kind clusters of its own: in both modes, install, the demonstration, reads over HTTP, `helm test`, an upgrade from the published images, rollback, password changes, readiness, NetworkPolicy and uninstall; then evaluation mode on the oldest supported Kubernetes release as a user with only the rights the guide lists; and everything it created removed; stage 9 of `run_ci_suite.sh` |
 | [`check_secrets_and_local_config.py`](check_secrets_and_local_config.py) | The check for committed secrets and local configuration over the publishable tree; findings name rule, file and line, never the matched text |
 | [`DB/run_task_1a_demo.sh`](DB/run_task_1a_demo.sh) | The clean-clone acceptance demonstration: a disposable database, bundled ORCID and Crossref payloads, queries and a verified export, with no metadata-provider request |
 | [`DB/run_disposable_integration.sh`](DB/run_disposable_integration.sh) | The complete integration suite against a PostgreSQL started, bound and removed for that run alone |
@@ -78,6 +85,7 @@ NLnet project number: 2026-02-585.
 | [`TASK_1A.md`](TASK_1A.md) | The acceptance record for the first funded result, requirement by requirement |
 | [`TASK_1B.md`](TASK_1B.md) | The acceptance record for the second funded result, the forge-portable test suite |
 | [`TASK_2A.md`](TASK_2A.md) | The acceptance record for the container image and the Compose deployment |
+| [`TASK_2B.md`](TASK_2B.md) | The acceptance record for the Helm chart and its tests on a disposable cluster |
 | [`DEVELOPMENT_METHODS.md`](DEVELOPMENT_METHODS.md) | How the initial public baseline was prepared, reviewed and verified |
 | [`QUICKSTART.md`](QUICKSTART.md) | Clean clone to a running database with demo data, a query over what landed, and an export |
 | [`QUICKSTART_CURATION.md`](QUICKSTART_CURATION.md) | Curation, aliases and reporting exports on top of that state |
@@ -90,6 +98,7 @@ NLnet project number: 2026-02-585.
 | Way | What runs | Guide |
 |---|---|---|
 | **The deployment, canonical** | PostgreSQL, the read service and the ingestion commands from one image, with [`compose.yaml`](compose.yaml) | [`DEPLOYMENT.md`](DEPLOYMENT.md) |
+| A Kubernetes cluster | the same images, installed with the Helm chart in [`charts/pubdex/`](charts/pubdex/), with a PostgreSQL of its own or yours | [`KUBERNETES.md`](KUBERNETES.md) |
 | The development and walkthrough setup | PostgreSQL from [`DB/compose.yaml`](DB/compose.yaml), the `people_pubs` package from a virtual environment on the host | [`QUICKSTART.md`](QUICKSTART.md) |
 
 [`DEPLOYMENT.md`](DEPLOYMENT.md), *The development setup*, compares the two.
@@ -123,6 +132,19 @@ docker compose run --rm demo                     # optional: the synthetic demon
 [`DEPLOYMENT.md`](DEPLOYMENT.md) starts with this short path and covers the
 rest: a published image without a clone, settings, secrets, health checks,
 storage, backup and restore, ingestion, and checking a deployment.
+
+### Running PubDex on Kubernetes
+
+On Kubernetes 1.35 to 1.37 with Helm 4.3 or a later 4.x, the chart in
+[`charts/pubdex/`](charts/pubdex/) installs the same images from a clone of
+this repository: in evaluation mode with a PostgreSQL 16 of its own, or
+against a PostgreSQL 16 server you run. [`KUBERNETES.md`](KUBERNETES.md)
+starts with a short path from a clone to the synthetic demonstration read
+over a port forward, says which platforms are supported and which were
+tested, and ends with an appendix that says, for each block of its
+commands, what ran it.
+The read service has no authentication there either: the guide's
+*Ingress and TLS* and *NetworkPolicy* say what that means in a cluster.
 
 ### Working on PubDex
 
@@ -182,14 +204,18 @@ Two commands, both from the repository root:
   task-1a clean-clone demonstration, the complete integration suite against
   its own disposable PostgreSQL, the acceptance test of the Compose
   deployment, which builds the image from the checkout and starts the stack,
-  and the test of the operator's workflow on that deployment.
+  the test of the operator's workflow on that deployment, the offline
+  checks of the Helm chart, and the chart's acceptance test on disposable
+  kind clusters of the newest and the oldest supported Kubernetes release,
+  which installs, upgrades, rolls back and uninstalls it in both of its
+  modes.
   It stops at the first failing stage;
   `--base <sha> [--head <sha>]` adds the transform-version guard over that
   commit range and checks the files its commits add or change for secrets
   and local configuration, as the CI workflows do for the pushes and pull
   requests they run on. It
-  needs Bash and a Docker Engine with the Compose plugin running on the same
-  machine;
+  needs Bash, the pinned helm, kubectl and kind (below) and a Docker Engine
+  with the Compose plugin running on the same machine;
   [`DB/TESTING_STRATEGY.md`](DB/TESTING_STRATEGY.md) gives the contract a CI
   runner on another forge has to meet.
 
@@ -199,22 +225,43 @@ Two commands, both from the repository root:
 
 The complete suite needs a Git checkout, Python 3.11 with pip from
 `DB/requirements-pip.txt` and then `DB/requirements-dev.txt` installed into
-`.venv` (as above), and a Docker Engine
+`.venv` (as above), the pinned helm, kubectl and kind that
+`./setup_cluster_tools.sh` installs (below), `openssl`, and a Docker Engine
 28.0.1 or later, except 28.2.0 to 28.3.2, with the buildx plugin and the Compose plugin 2.24.0 or later, which your user can reach
-and which can pull `postgres:16` and the images the `Dockerfile` and
-`compose.yaml` name. It uses only synthetic fixtures and disposable
+and which can pull `postgres:16`, the images the `Dockerfile` and
+`compose.yaml` name and kind's two node images; the kind clusters' nodes pull
+the published images from `ghcr.io`. It uses only synthetic fixtures and disposable
 databases: each Docker-backed stage starts its own uniquely named resources —
-the last two a Compose project of their own — publishes them on loopback at
+stages 6 and 7 a Compose project of their own, stage 9 two kind clusters,
+one after the other, each on a Docker network of its own — publishes them on loopback at
 most, and removes them again when the stage ends, also after a failure or an
 interrupt; their throwaway passwords never appear on a command line or in the
-output. No stage connects to an existing database or a metadata provider, or
-reads `DB/.env`, so the suite neither needs nor touches a database or stack
-you run yourself.
+output. No stage connects to an existing database, Kubernetes cluster or
+metadata provider, or reads `DB/.env` or your kubeconfig, so the suite
+neither needs nor touches a database, stack or cluster you run yourself.
 
 Each stage is also a command of its own for focused debugging — for example
 `(cd DB && ./run_migration_smoke.sh)` or `./DB/run_disposable_integration.sh`;
 [`DB/TESTING_STRATEGY.md`](DB/TESTING_STRATEGY.md) lists them all. To run only
 the unit tests, `(cd DB && ./run_tests.sh)` still works.
+
+The Kubernetes checks use their own pinned helm, kubectl and kind, never
+the copies on your `PATH`: `./setup_cluster_tools.sh` (Linux on x86_64)
+downloads the versions [`DB/lib/cluster_tools.sh`](DB/lib/cluster_tools.sh)
+fixes, checks each against its pinned SHA-256 and installs it under `.tools/`.
+`./run_chart_checks.sh`, stage 8 of the complete suite, checks the Helm chart
+in `charts/pubdex/` offline with that helm. `./run_cluster_acceptance.sh`,
+stage 9, runs the chart on two kind clusters that it creates and deletes
+again, one after the other, each with its own kubeconfig, and runs the
+commands that the appendix of [`KUBERNETES.md`](KUBERNETES.md) assigns to its
+steps; about six minutes on a workstation with Docker's build cache warm. `./run_checks.sh`
+does not need the tools.
+
+```bash
+./setup_cluster_tools.sh         # once: the pinned helm, kubectl and kind under .tools/
+./run_chart_checks.sh            # stage 8: offline, no cluster
+./run_cluster_acceptance.sh      # stage 9: a disposable kind cluster; needs Docker
+```
 
 ## Licensing
 

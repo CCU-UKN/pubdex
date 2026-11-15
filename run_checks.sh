@@ -20,8 +20,9 @@
 #   ./run_checks.sh --base <sha> --head <sha>    # a pushed or proposed range
 #
 # This is deliberately NOT the whole verification story. run_ci_suite.sh adds
-# the following stages, each also a command of its own; all but the first
-# need Docker:
+# the following stages, each also a command of its own; all but the first and
+# the last need Docker, and the last needs the pinned helm
+# (./setup_cluster_tools.sh):
 #
 #   check_secrets_and_local_config.py  committed secrets and local configuration
 #   DB/run_migration_smoke.sh          schema bootstrap from an empty database
@@ -29,6 +30,7 @@
 #   DB/run_disposable_integration.sh   the integration suite on a disposable PostgreSQL
 #   run_stack_acceptance.sh            the Compose deployment, started and checked end to end
 #   run_operator_acceptance.sh         the operator's workflow on that deployment
+#   run_chart_checks.sh                the Helm chart, linted, rendered and checked offline
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

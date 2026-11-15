@@ -1,0 +1,37 @@
+# External mode: PubDex on your own PostgreSQL 16 server, with TLS checked
+# against your CA and the database prepared by the chart's setup Job.
+#
+# Before the install, on the server: a database people_db owned by the role
+# people_db_owner, which has CREATEROLE (values.yaml, externalDatabase).
+# In the release's namespace:
+#
+#   ./create_secrets.sh
+#   kubectl create secret generic pubdex-credentials \
+#     --from-file=secrets/app_readonly_password \
+#     --from-file=secrets/app_writer_password
+#   kubectl create secret generic pubdex-db-admin --from-file=password=<file with the owner's password>
+#   kubectl create configmap pubdex-db-ca --from-file=ca.crt=<the server's CA certificate>
+#
+# Then, from the repository's root:
+#
+#   helm install pubdex charts/pubdex --values charts/pubdex/examples/values-external.yaml
+#
+# and delete the Secret pubdex-db-admin until the next upgrade.
+mode: external
+secrets:
+  name: pubdex-credentials
+database:
+  name: people_db
+externalDatabase:
+  host: db.example.org
+  port: 5432
+  sslmode: verify-full
+  caCertificate:
+    configMapName: pubdex-db-ca
+    key: ca.crt
+  setup:
+    enabled: true
+    adminUser: people_db_owner
+    adminSecret:
+      name: pubdex-db-admin
+      key: password

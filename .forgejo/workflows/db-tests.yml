@@ -2,7 +2,9 @@
 # the counterpart of .github/workflows/db-tests.yml. Everything this job
 # verifies lives in run_ci_suite.sh and the tracked scripts it calls: the job
 # checks the repository out with its history, creates .venv with
-# ./setup_venv.sh, and runs ./run_ci_suite.sh with the event's commit range.
+# ./setup_venv.sh, installs the pinned helm, kubectl and kind under .tools/
+# with ./setup_cluster_tools.sh, and runs the nine stages of ./run_ci_suite.sh
+# with the event's commit range.
 #
 # It needs a Forgejo Runner that has the label below as a host label
 # (pubdex-ci-host:host), so that the job runs directly on a machine meeting
@@ -15,16 +17,23 @@
 # 28.2.0 to 28.3.2, with the buildx plugin and the Compose plugin 2.24.0 or later
 # (DB/lib/docker_versions.sh), a daemon on the same machine whose socket the
 # job's user may use, and access to the registries and the package index
-# unless Docker has the images and packages already. A runner that runs jobs
-# in containers does not meet it.
+# unless Docker has the images and packages already. The tool setup needs
+# HTTPS access to the downloads DB/lib/cluster_tools.sh names, and sha256sum.
+# Stage 9 creates two kind clusters on that daemon, one after the other, so
+# the daemon has to run kind's node as a privileged container and publish
+# each cluster's API server on 127.0.0.1, and stage 9 needs openssl, kind's
+# two node images by digest unless Docker has them, and from inside the
+# nodes, without credentials, the registry of the published images
+# (ghcr.io). A runner that runs jobs in containers does not meet it.
 #
 # The checkout action is GitHub's actions/checkout at the commit the GitHub
 # workflow pins, fetched from Forgejo's mirror by absolute URL. No action
 # installs Python, because actions/setup-python downloads its interpreters
 # from GitHub; the runner provides python3.11, and the suite's log records
-# the versions each run used. pip and the packages are pinned, fetched and
-# installed as in the GitHub workflow. Forgejo documents `permissions:` as ignored, so none is
-# set; the automatic token is not stored in the checkout.
+# the versions each run used. pip and the packages, helm, kubectl, kind and
+# the images are pinned, fetched and installed as in the GitHub workflow.
+# Forgejo documents `permissions:` as ignored, so none is set; the automatic
+# token is not stored in the checkout.
 name: DB tests
 
 on:
@@ -34,7 +43,13 @@ on:
 jobs:
   checks:
     runs-on: pubdex-ci-host
-    timeout-minutes: 30
+    # The same limit as the GitHub workflow, for the same estimate: the nine
+    # stages took about 13.5 minutes on a workstation and are estimated at
+    # about 24 on a hosted runner; the limit is 1.5 times that, rounded up to
+    # a multiple of 5. Forgejo Runner ends a job at its limit with SIGKILL,
+    # which skips the running stage's cleanup (DB/TESTING_STRATEGY.md,
+    # "Forgejo Actions").
+    timeout-minutes: 40
     steps:
       - uses: https://data.forgejo.org/actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
@@ -44,6 +59,8 @@ jobs:
           persist-credentials: false
       - name: Install dependencies
         run: ./setup_venv.sh --python python3.11
+      - name: Install the pinned cluster tools
+        run: ./setup_cluster_tools.sh
       - name: Run the complete verification suite
         # Forgejo runs a pull request's head commit, not a merge commit, so
         # its range starts at the merge base the event names. A push starts

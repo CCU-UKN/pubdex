@@ -7,6 +7,9 @@ application image that also carries the database schema. The image and
 `compose.yaml` are the whole deployment. [`DB/compose.yaml`](DB/compose.yaml)
 is the development and walkthrough setup of [`QUICKSTART.md`](QUICKSTART.md),
 not a deployment ([The development setup](#the-development-setup-dbcomposeyaml)).
+For a Kubernetes cluster, the Helm chart in [`charts/pubdex/`](charts/pubdex/)
+runs the same images; [`KUBERNETES.md`](KUBERNETES.md) is its guide. This
+page, and `compose.yaml`, stay the canonical deployment on one host.
 
 ## The short path
 

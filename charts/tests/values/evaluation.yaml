@@ -1,0 +1,137 @@
+# Evaluation mode with every setting changed that it has, so that the checks
+# see each value reach the manifests: images from another registry by tag and
+# digest, a pull secret, another database name, a smaller volume of a named
+# class that is deleted with the release, other limits and timings, two read
+# service pods, the ingestion settings and three ingestion tasks (scheduled,
+# paused and on demand), the demonstration, an Ingress with two hosts of
+# which one has TLS, more peers for the read service's NetworkPolicy, and
+# every scheduling and metadata value of the pods, which the read service
+# and PostgreSQL replace in part: by other values, and by none ({} and []).
+mode: evaluation
+image:
+  registry: registry.example.org:5000
+  repository: mirror/pubdex
+  tag: "0.1.0-mirror"
+  digest: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+  pullPolicy: Always
+postgresImage:
+  registry: registry.example.org:5000
+  repository: mirror/pubdex-postgres
+  tag: "0.1.0-mirror"
+  digest: "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+  pullPolicy: Always
+imagePullSecrets:
+  - name: registry-credentials
+nodeSelector:
+  example.org/pool: pubdex
+tolerations:
+  - key: example.org/dedicated
+    operator: Equal
+    value: pubdex
+    effect: NoSchedule
+affinity:
+  nodeAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 50
+        preference:
+          matchExpressions:
+            - key: example.org/zone
+              operator: In
+              values: [a, b]
+podAnnotations:
+  example.org/owner: curation
+podLabels:
+  example.org/team: curation
+priorityClassName: pubdex-normal
+secrets:
+  name: evaluation-credentials
+database:
+  name: evaluation_db
+postgresql:
+  persistence:
+    size: 2Gi
+    storageClass: standard
+    retainOnUninstall: false
+  shmSize: 128Mi
+  terminationGracePeriodSeconds: 90
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      memory: 1Gi
+  nodeSelector:
+    example.org/storage: ssd
+  podLabels: {}
+  priorityClassName: pubdex-database
+api:
+  replicas: 2
+  logLevel: DEBUG
+  poolSize: 8
+  dbWaitSeconds: 10
+  statementTimeoutMs: 15000
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 384Mi
+  tolerations: []
+  podAnnotations:
+    example.org/scrape: "true"
+  service:
+    port: 8080
+ingestion:
+  crossrefMailto: curation@example.org
+  orgPatterns: "Example University; EXU"
+  resources:
+    requests:
+      cpu: 100m
+      memory: 192Mi
+    limits:
+      memory: 512Mi
+  tasks:
+    orcid-works:
+      command: [python, -m, people_pubs.sync.orcid_works, --since, "2019-01-01"]
+      schedule: "15 3 * * 0"
+      activeDeadlineSeconds: 7200
+    crossref:
+      command: [python, -m, people_pubs.sync.crossref_backfill, --max, "200", --merge-mode, doi]
+      schedule: "@daily"
+      suspend: true
+    refresh:
+      command: [python, -m, people_pubs.sync.attribution_rules, recompute, --refresh-only]
+demo:
+  enabled: true
+ingress:
+  enabled: true
+  className: example-class
+  annotations:
+    example.org/proxy-body-size: "1m"
+  hosts:
+    - host: pubdex.example.org
+      paths:
+        - path: /v0
+          pathType: Prefix
+        - path: /readyz
+          pathType: Exact
+    - host: internal.example.org
+  tls:
+    - secretName: pubdex-example-tls
+      hosts:
+        - pubdex.example.org
+networkPolicy:
+  enabled: true
+  api:
+    allowFrom:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: ingress-controller
+        podSelector:
+          matchExpressions:
+            - key: app.kubernetes.io/name
+              operator: In
+              values: [controller]
+      - ipBlock:
+          cidr: 198.51.100.0/24
+          except: [198.51.100.128/25]

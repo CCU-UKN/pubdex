@@ -1,0 +1,448 @@
+# Values of the PubDex chart. Every key is listed here with its default;
+# values.schema.json refuses any key not listed here, and a value of the
+# wrong type or form, before anything is rendered.
+#
+# The chart takes no password and generates none: the database credentials
+# come from a Secret you create (secrets.name), so no password reaches these
+# values, the rendered manifests or Helm's release history.
+
+# How the chart provides the database.
+#   evaluation   the chart runs PostgreSQL 16 itself: a single-replica
+#                StatefulSet with a volume of its own, initialised on its
+#                first start with the schema the application image carries.
+#                For trying PubDex out with synthetic or disposable data;
+#                no replication, no scheduled backup, and backup and
+#                restore untested on Kubernetes. Data you cannot lose
+#                belongs in external mode.
+#   external     PubDex uses a database on a PostgreSQL 16 server you run,
+#                which externalDatabase describes. The chart runs no
+#                database server, and its setup Job prepares the database
+#                at the install and runs again at each upgrade that does
+#                not switch it off (externalDatabase.setup.enabled).
+# Default: evaluation.
+mode: evaluation
+
+# The application image: the read service, the ingestion commands and the
+# schema bootstrap. The reference is <registry>/<repository>:<tag>@<digest>;
+# with a digest the node pulls exactly that image and the tag is only a
+# label. An empty registry leaves the repository as it is (for example an
+# image loaded into the nodes); an empty digest pulls by tag.
+image:
+  # Default: ghcr.io
+  registry: ghcr.io
+  # Default: ccu-ukn/pubdex
+  repository: ccu-ukn/pubdex
+  # Default: "0.1.0", the chart's appVersion.
+  tag: "0.1.0"
+  # Default: the digest of the published 0.1.0 image (linux/amd64).
+  digest: "sha256:24d570015b20f222c767a8bb89dd18d792abbd25cc730137f7b8bc285df6a325"
+  # Always, IfNotPresent or Never. Default: IfNotPresent.
+  pullPolicy: IfNotPresent
+
+# The PostgreSQL 16 image of the release, which keeps the entrypoint, data
+# directory and stop signal of the official postgres image. Same form as image.
+postgresImage:
+  # Default: ghcr.io
+  registry: ghcr.io
+  # Default: ccu-ukn/pubdex-postgres
+  repository: ccu-ukn/pubdex-postgres
+  # Default: "0.1.0"
+  tag: "0.1.0"
+  # Default: the digest of the published 0.1.0 PostgreSQL image (linux/amd64).
+  digest: "sha256:33988fb179e2065e653ad7813cecf812c21f4381537b8b8db546ad37236b780a"
+  # Default: IfNotPresent.
+  pullPolicy: IfNotPresent
+
+# Names of existing Secrets of type kubernetes.io/dockerconfigjson in the
+# release's namespace, for a registry that needs credentials, as
+# [{name: <secret>}]. Default: [] (the published images need none).
+imagePullSecrets: []
+
+# Where the release's pods run, and what they carry for other tools. Each of
+# the six keys below applies to every pod of the release: the read service,
+# PostgreSQL (evaluation mode, with its init container), the setup Job
+# (external mode), the ingestion CronJobs' runs, the demonstration, the
+# helm test pod, and the attached one-off pod of the ConfigMap <release>-run.
+# api and postgresql can set each key for their own pods (see there).
+# Kubernetes' own forms; the defaults set nothing.
+#
+# Node labels a node needs to run the pods, as {<label>: <value>}.
+# Default: {}.
+nodeSelector: {}
+# Taints the pods tolerate, as a list of Kubernetes tolerations, for example
+#   - key: dedicated
+#     operator: Equal
+#     value: pubdex
+#     effect: NoSchedule
+# Default: [].
+tolerations: []
+# Node affinity and pod (anti-)affinity: a Kubernetes affinity with
+# nodeAffinity, podAffinity and podAntiAffinity. Default: {}.
+affinity: {}
+# More annotations of the pods. The chart's own -- checksum/config and Helm's
+# hook annotations -- cannot be set here; rendering fails and names the key.
+# Default: {}.
+podAnnotations: {}
+# More labels of the pods. The labels the chart sets itself cannot be set
+# here, and rendering fails and names the key: app.kubernetes.io/name,
+# instance, component, version, part-of and managed-by, helm.sh/chart, and
+# the client label <release>-client (networkPolicy). Default: {}.
+podLabels: {}
+# The name of an existing PriorityClass of the cluster; "" leaves the
+# cluster's default priority. Default: "".
+priorityClassName: ""
+
+# The database credentials.
+secrets:
+  # Required: the name of an existing Secret in the release's namespace with
+  # the files create_secrets.sh creates as its keys:
+  #   postgres_password       the PostgreSQL superuser, postgres; evaluation
+  #                           mode only
+  #   app_readonly_password   app_readonly, the read service's role
+  #   app_writer_password     app_writer, the ingestion role
+  # Create it from those files, for example:
+  #   ./create_secrets.sh
+  #   kubectl create secret generic pubdex-credentials \
+  #     --from-file=secrets/postgres_password \
+  #     --from-file=secrets/app_readonly_password \
+  #     --from-file=secrets/app_writer_password
+  # External mode needs only the last two keys. Each container mounts only
+  # the key(s) it needs, as files readable by its own group (mode 0440):
+  # PostgreSQL all three, the read service app_readonly_password only, the
+  # ingestion and demonstration pods app_writer_password only, the setup Job
+  # of external mode the two role passwords.
+  # In evaluation mode the passwords take effect when the database is
+  # initialised, and a later change of the Secret does not change them. In
+  # external mode the setup Job sets them at the install and at each upgrade
+  # it runs at.
+  # Default: "" (rendering fails until it is set).
+  name: ""
+
+database:
+  # Name of the PubDex database. Lower-case letters, digits and underscores.
+  # In external mode the database has to exist on the server.
+  # Default: people_db
+  name: people_db
+
+# The PostgreSQL server of evaluation mode.
+postgresql:
+  persistence:
+    # Size of the data volume, a Kubernetes quantity. Default: 8Gi.
+    size: 8Gi
+    # StorageClass of the data volume; "" uses the cluster's default class.
+    # The class must provide ReadWriteOnce volumes that PostgreSQL, uid and
+    # gid 999, can write to: through the pod's fsGroup, or because the
+    # provisioner creates them writable for every user. Default: "".
+    storageClass: ""
+    # true keeps the volume, and with it the database, when the release is
+    # uninstalled; it is then deleted by hand
+    # (kubectl delete pvc data-<release>-postgresql-0), and until then a new
+    # install of the same release name uses it again, with the passwords it
+    # was initialised with. false deletes it with the release. Default: true.
+    retainOnUninstall: true
+  # Size limit of the in-memory /dev/shm that parallel queries use. It counts
+  # against the pod's memory. Default: 256Mi.
+  shmSize: 256Mi
+  # Seconds between the stop signal (SIGINT, a fast shutdown) and a forced
+  # kill. Default: 60.
+  terminationGracePeriodSeconds: 60
+  # Compute resources of the PostgreSQL container; the schema bootstrap that
+  # runs before it gets the same. Requests keep the database out of the
+  # best-effort class that is evicted first. A memory limit has to leave room
+  # for shmSize. Default: requests of 100m CPU and 256Mi memory, no limits.
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+  # The six scheduling and metadata keys of the top level, for the
+  # PostgreSQL pod alone. null, or the key left out, takes the top-level
+  # value. Any other value replaces it for this pod and is never merged with
+  # it, so {}, [] and "" set none here. (Helm deletes a key that a values
+  # file or --set sets to null when the chart gives it a value of its own;
+  # these keys have none, so the null reaches the chart. A null for a
+  # top-level key deletes it, and the schema refuses the values.)
+  # Default: null.
+  nodeSelector: null
+  tolerations: null
+  affinity: null
+  podAnnotations: null
+  podLabels: null
+  priorityClassName: null
+
+# The PostgreSQL server of external mode. Evaluation mode refuses a host or
+# a CA certificate here.
+#
+# What the server has to provide before the first install:
+#   - PostgreSQL 16; the setup refuses other versions;
+#   - a database for PubDex alone, named database.name, owned by the admin
+#     role below, which has CREATEROLE; or a superuser as the admin role;
+#   - the extensions citext, pgcrypto, unaccent and pg_trgm. PostgreSQL 16
+#     marks all four trusted, so the database's owner creates them; where a
+#     server does not allow that, they have to exist in the database's
+#     schema public already;
+#   - TCP connections from the release's namespace, which pg_hba.conf
+#     authenticates by scram-sha-256 (or md5, which runs SCRAM for a SCRAM
+#     password). The admin role's password, too, has to be stored as SCRAM:
+#     every connection of the setup requires SCRAM, and it sends nothing to
+#     a server that asks for another method.
+# The setup creates the roles app_readonly, app_writer and maintenance. A
+# role belongs to the whole server, not to one database, so one server holds
+# one PubDex installation: the setup refuses a database without the PubDex
+# schema while these roles exist.
+externalDatabase:
+  # The server's host name or address, as the release's pods reach it.
+  # Required in external mode. Default: "".
+  host: ""
+  # Default: 5432.
+  port: 5432
+  # libpq's sslmode for every connection to the server: the read service's,
+  # the ingestion commands' and the setup Job's. Default: verify-full: TLS,
+  # with the server's certificate checked against caCertificate and required
+  # to name host, so the connections reach your server and no other.
+  # verify-full needs caCertificate, and rendering fails without it.
+  # A weaker mode is your explicit choice, and gives up:
+  #   verify-ca   the check of the name: a host with any certificate that
+  #               CA signed can pose as the server;
+  #   require     the check of the certificate: any host can pose as the
+  #               server, and read and change what the connections carry;
+  #   prefer      also TLS itself whenever the server, or a host that poses
+  #               as it, does not offer it;
+  #   allow       TLS unless the server insists on it;
+  #   disable     TLS altogether.
+  # Passwords travel by SCRAM in every mode, so none is sent as such.
+  sslmode: verify-full
+  # The CA certificate, in PEM, that verify-ca and verify-full check the
+  # server's certificate against: a key of an existing Secret or ConfigMap
+  # in the release's namespace. Name one of the two. Required by verify-ca
+  # and verify-full, refused with the other modes. The containers that
+  # connect to the server mount it read-only at /run/pubdex/ca/<key>.
+  # Default: none; the default sslmode needs one.
+  caCertificate:
+    # Default: "".
+    secretName: ""
+    # Default: "".
+    configMapName: ""
+    # Default: ca.crt.
+    key: ca.crt
+  # The setup Job, a hook of helm install and helm upgrade that runs before
+  # the release's other objects change. As the admin role it applies the
+  # schema of the application image when the database has none, then on
+  # every run sets the passwords of app_readonly and app_writer from
+  # secrets.name and lets only these roles and the owner connect. Before it
+  # changes anything it checks the server, the admin role's privileges and
+  # the roles and schema already there; a failed check fails the install or
+  # upgrade, and kubectl logs job/<release>-setup says why. The script is
+  # charts/pubdex/files/external-setup.sh; its header lists every check.
+  setup:
+    # false: the chart renders no setup Job. Two uses:
+    #   - a routine upgrade, which changes no password: pass
+    #     --set externalDatabase.setup.enabled=false to that upgrade alone,
+    #     and the admin Secret need not exist (KUBERNETES.md, Upgrade). A
+    #     password change needs the setup: never put this switch in a values
+    #     file you give to every upgrade, and give that upgrade the values
+    #     files, not --reuse-values, which would keep the switch;
+    #   - no setup Job ever: you run the same script by hand, once before the
+    #     first install and again after each change of the passwords
+    #     (KUBERNETES.md, Installing without the setup Job).
+    # Default: true.
+    enabled: true
+    # The admin role: owns the database and has CREATEROLE, or is a
+    # superuser; never one of the roles the setup creates. It has to stay the
+    # same: only the role that created the schema and the roles can set
+    # their passwords later. Required when enabled. Default: "".
+    adminUser: ""
+    # An existing Secret, not the one secrets.name names, with the admin
+    # role's password; only the setup Job mounts it. Create it before each
+    # run of the setup -- the install, a password change -- and delete it
+    # afterwards, for example:
+    #   kubectl create secret generic pubdex-db-admin --from-file=password=admin_password
+    #   kubectl delete secret pubdex-db-admin
+    # Without it the setup Job, and with it the install or upgrade, fails.
+    adminSecret:
+      # Required when enabled. Default: "".
+      name: ""
+      # Default: password.
+      key: password
+    # Compute resources of the setup Job's containers. Default: requests of
+    # 50m CPU and 64Mi memory, no limits.
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+
+# The read service: GET /v0/publications, /livez and /readyz, as
+# app_readonly. It has no authentication and no TLS; anything that can reach
+# its Service can read everything it serves (networkPolicy limits who can).
+api:
+  # Number of pods. Default: 1.
+  #
+  # The connections a release opens to PostgreSQL, derived from the
+  # application's code and the Deployment's default rolling update; the
+  # chart checks none of it. Each read service pod opens poolSize at most,
+  # its readiness checks included. A rolling update runs up to replicas +
+  # replicas/4 pods (rounded up), so the read service holds at most
+  # (replicas + ceil(replicas / 4)) x poolSize, with the defaults 2 x 4 = 8.
+  # Each running ingestion command adds one, refresh_state_runner two (its
+  # own and that of the command it starts); the setup Job and the
+  # demonstration add one each while they run; helm test opens none. The sum
+  # has to stay below the server's max_connections, less its
+  # superuser_reserved_connections and reserved_connections and what its
+  # other clients use. PostgreSQL 16 defaults to 100, 3 and 0, which
+  # evaluation mode's server keeps.
+  replicas: 1
+  # DEBUG, INFO, WARNING or ERROR. Default: INFO.
+  logLevel: INFO
+  # Database connections per pod at most, 1 to 32; replicas gives the
+  # release's total. Default: 4.
+  poolSize: 4
+  # Longest wait in whole seconds for a database connection, per request
+  # and per readiness check, 1 to 300. The readiness probe's timeout is two
+  # seconds longer. Default: 5.
+  dbWaitSeconds: 5
+  # Longest time in milliseconds a query may run, 100 to 600000.
+  # Default: 5000.
+  statementTimeoutMs: 5000
+  # Compute resources of each pod. Default: requests of 50m CPU and 96Mi
+  # memory, a memory limit of 256Mi, no CPU limit.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 96Mi
+    limits:
+      memory: 256Mi
+  # The six scheduling and metadata keys of the top level, for the read
+  # service's pods alone, by the rule of postgresql's: null, or the key left
+  # out, takes the top-level value; any other value, {}, [] and "" included,
+  # replaces it and is never merged with it. Default: null.
+  nodeSelector: null
+  tolerations: null
+  affinity: null
+  podAnnotations: null
+  podLabels: null
+  priorityClassName: null
+  service:
+    # Port of the ClusterIP Service <release>-api; the pods listen on 8000.
+    # Default: 8000.
+    port: 8000
+
+# The ingestion commands, python -m people_pubs.sync.<command> of
+# DB/SCRIPTS.md. They run as app_writer, with that role's password file and
+# no other credential, under Pod Security "restricted", in two ways:
+#   - as Jobs of the CronJobs that tasks defines, on their schedule or on
+#     demand: kubectl create job --from=cronjob/<release>-ingest-<task> <name>
+#   - attached to your terminal, in a one-off pod that is deleted when the
+#     command ends, with the pod specification the chart keeps in the
+#     ConfigMap <release>-run (helm get notes <release> prints the command).
+#     Its standard input and output are yours, so a roster reaches it there
+#     and nowhere else:
+#       ... -- python -m people_pubs.sync.add_people --csv - < roster.csv
+# A roster holds personal data. Never give it, or a name or address from it,
+# in these values or on a command line: Helm keeps values and rendered
+# manifests in the release's history, and Kubernetes keeps command lines in
+# the pod's specification.
+ingestion:
+  # Contact address for Crossref's polite pool, for example
+  # you@example.org (PEOPLE_PUBS_CROSSREF_MAILTO). Default: "" (none).
+  crossrefMailto: ""
+  # Employers that count as yours, for ORCID profile enrichment: organisation
+  # names and abbreviations separated by semicolons or commas
+  # (PEOPLE_PUBS_ORG_PATTERNS). Empty means that no employment matches.
+  # Default: "".
+  orgPatterns: ""
+  # Compute resources of every ingestion pod, the demonstration's included.
+  # Default: requests of 50m CPU and 128Mi memory, no limits.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+  # One CronJob <release>-ingest-<task> per entry, <task> being lower-case
+  # letters, digits and hyphens; the CronJob's name may have 52 characters at
+  # most. Each entry:
+  #   command      required: [python, -m, people_pubs.sync.<command>,
+  #                <argument>...]. add_people is refused: a roster goes on
+  #                standard input, as above.
+  #   schedule     a cron schedule in the controller's time zone, usually
+  #                UTC, such as "15 3 * * 0"; empty (the default): no
+  #                schedule, the CronJob is suspended and runs only on demand.
+  #   suspend      with a schedule, true pauses it. Default: false.
+  #   activeDeadlineSeconds
+  #                with it, a run is stopped after that many seconds.
+  #                Default: none.
+  # A run is never retried and never overlaps the previous run of its task;
+  # the last three succeeded and the last three failed runs are kept, with
+  # their logs, until later runs replace them. For example:
+  #   tasks:
+  #     orcid-works:
+  #       command: [python, -m, people_pubs.sync.orcid_works]
+  #       schedule: "15 3 * * 0"
+  #     refresh:
+  #       command: [python, -m, people_pubs.sync.attribution_rules, recompute, --refresh-only]
+  # Default: {} (no CronJob).
+  tasks: {}
+
+# The synthetic demonstration of QUICKSTART.md, as compose.yaml's demo
+# service runs it: the bundled roster, the bundled ORCID and Crossref
+# payloads -- no metadata-provider request -- and the fictional institute
+# they name as an attribution rule. GET /v0/publications then serves the DOI
+# 10.5555/pubdex-fixture-001.
+demo:
+  # true: a Job <release>-demo runs it once, as a hook after helm install,
+  # never after an upgrade. It writes synthetic records into the database:
+  # only for a release you try PubDex out with and uninstall afterwards,
+  # together with its volume. Evaluation mode only; external mode refuses
+  # it. Default: false.
+  enabled: false
+
+# An Ingress for the read service.
+#
+# WARNING: the read service has no authentication. An Ingress publishes
+# everything it serves to everyone who can reach the Ingress's hosts. Put
+# authentication in front of it, or keep the hosts private, before you
+# enable this.
+ingress:
+  # Default: false.
+  enabled: false
+  # The IngressClass of the controller that serves it; "" uses the cluster's
+  # default class. Default: "".
+  className: ""
+  # Annotations for the controller or a certificate manager, for example
+  # cert-manager.io/cluster-issuer: <issuer>. Default: {}.
+  annotations: {}
+  # The hosts it answers for, at least one when enabled, each as
+  #   - host: pubdex.example.org
+  #     paths:               default: [{path: /, pathType: Prefix}]
+  #       - path: /
+  #         pathType: Prefix   Prefix, Exact or ImplementationSpecific
+  # Default: [].
+  hosts: []
+  # TLS for the hosts, from Secrets of type kubernetes.io/tls in the
+  # release's namespace, each as
+  #   - secretName: pubdex-tls
+  #     hosts: [pubdex.example.org]
+  # Without it the hosts are served by plain HTTP. Examples:
+  # examples/values-ingress-tls.yaml and
+  # examples/values-ingress-cert-manager.yaml. Default: [].
+  tls: []
+
+# NetworkPolicies that admit to the release's pods only the connections they
+# need. Only a cluster whose network plugin enforces NetworkPolicy applies
+# them; on any other they change nothing, without an error.
+#   - PostgreSQL (evaluation mode) admits TCP 5432 only from the release's
+#     read service, ingestion and demonstration pods.
+#   - The read service admits TCP 8000 only from pods in the release's
+#     namespace that carry the label <release>-client: "true", and from the
+#     peers in api.allowFrom.
+# Connections from the pods are not restricted: ingestion reaches the
+# metadata providers and DNS, and in external mode the server, wherever they
+# are. kubectl port-forward and the kubelet's probes are not affected.
+networkPolicy:
+  # Default: true.
+  enabled: true
+  api:
+    # More peers the read service admits, in the form of a NetworkPolicy's
+    # "from" entries, for example the namespace of an ingress controller:
+    #   - namespaceSelector:
+    #       matchLabels:
+    #         kubernetes.io/metadata.name: <controller namespace>
+    # Default: [].
+    allowFrom: []

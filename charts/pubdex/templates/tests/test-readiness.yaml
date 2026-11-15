@@ -1,0 +1,66 @@
+{{- /*
+The release's test, run by helm test: a pod with the application image that
+asks the read service through its Service for /readyz and for the first page
+of /v0/publications, and fails unless both answer 200 with JSON. It connects
+to no database and mounts no credential. It carries the release's client
+label, so the read service's NetworkPolicy admits it as it admits any other
+client. Helm deletes it once it has passed; a failed test pod is kept for
+kubectl logs until the next helm test replaces it.
+*/ -}}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ printf "%s-test" (include "pubdex.fullname" .) }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pubdex.labels" (dict "root" $ "component" "test") | nindent 4 }}
+    {{ include "pubdex.clientLabel" . }}: "true"
+    {{- with include "pubdex.podLabels" (dict "root" $ "component" "test") }}{{ . | nindent 4 }}{{ end }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    {{- with include "pubdex.podAnnotations" (dict "root" $ "component" "test") }}{{ . | nindent 4 }}{{ end }}
+spec:
+  restartPolicy: Never
+  serviceAccountName: {{ include "pubdex.apiName" . }}
+  automountServiceAccountToken: false
+  enableServiceLinks: false
+  {{- with .Values.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with include "pubdex.podScheduling" (dict "root" $ "component" "test") }}{{ . | nindent 2 }}{{ end }}
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: test
+      image: {{ include "pubdex.image" .Values.image | quote }}
+      imagePullPolicy: {{ .Values.image.pullPolicy }}
+      command:
+        - python
+        - -I
+        - -c
+        - |
+          import json, sys, urllib.request
+          base = sys.argv[1]
+          for path in ("/readyz", "/v0/publications?limit=1"):
+              with urllib.request.urlopen(base + path, timeout=10) as response:
+                  body = json.load(response)
+                  print(path, response.status, flush=True)
+                  if response.status != 200:
+                      sys.exit(f"{path} answered {response.status}")
+          if not isinstance(body.get("items"), list):
+              sys.exit("/v0/publications served no list of items")
+        - {{ printf "http://%s:%d" (include "pubdex.apiName" .) (.Values.api.service.port | int64) | quote }}
+      securityContext:
+        {{- include "pubdex.containerSecurityContext" . | nindent 8 }}
+      volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+  volumes:
+    - name: tmp
+      emptyDir: {}

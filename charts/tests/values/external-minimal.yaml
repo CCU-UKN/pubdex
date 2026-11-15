@@ -1,0 +1,15 @@
+# External mode with only what it requires: the server's host, the Secret of
+# the role passwords, the setup Job's admin role and Secret, and, since no CA
+# certificate is named, an sslmode weaker than the default verify-full,
+# chosen explicitly. prefer checks no certificate, so no CA certificate is
+# mounted anywhere.
+mode: external
+secrets:
+  name: external-credentials
+externalDatabase:
+  host: 192.0.2.10
+  sslmode: prefer
+  setup:
+    adminUser: dbadmin
+    adminSecret:
+      name: external-db-admin

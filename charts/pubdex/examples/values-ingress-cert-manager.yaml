@@ -1,0 +1,35 @@
+# Evaluation mode with the read service published through an Ingress, with
+# a certificate that a certificate manager in the cluster issues and keeps
+# in the Secret pubdex-tls.
+#
+# WARNING: the read service has no authentication. This Ingress publishes
+# everything it serves to everyone who can reach pubdex.example.org. Put
+# authentication in front of it, or keep the host private.
+#
+# The annotation is the one cert-manager reads; another certificate manager
+# documents its own. example-issuer stands for an issuer you have set up.
+# Before the install, create the Secret pubdex-credentials as in
+# values-ingress-tls.yaml, but not pubdex-tls: the certificate manager
+# creates and renews that one. Then, from the repository's root:
+#
+#   helm install pubdex charts/pubdex --values charts/pubdex/examples/values-ingress-cert-manager.yaml
+secrets:
+  name: pubdex-credentials
+ingress:
+  enabled: true
+  className: ""
+  annotations:
+    cert-manager.io/cluster-issuer: example-issuer
+  hosts:
+    - host: pubdex.example.org
+  tls:
+    - secretName: pubdex-tls
+      hosts:
+        - pubdex.example.org
+networkPolicy:
+  enabled: true
+  api:
+    allowFrom:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: ingress-controller

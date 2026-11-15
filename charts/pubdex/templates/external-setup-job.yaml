@@ -1,0 +1,191 @@
+{{- /*
+External mode: the setup Job, a hook of helm install and helm upgrade that
+runs before any other object of the release is created or changed. It
+prepares the database on the operator's server as the admin role
+(externalDatabase.setup), with files/external-setup.sh: the schema when the
+database has none, then the passwords of app_readonly and app_writer and the
+database's CONNECT privilege, and a SCRAM login of each role.
+
+- The init container bootstrap -- the application image, as in evaluation
+  mode -- copies the schema bootstrap the image carries into the emptyDir
+  initdb.
+- The container setup runs the script in the release's PostgreSQL image,
+  which has psql, as the image's postgres user, uid and gid 999.
+- It is the only pod that mounts the admin Secret. That Secret and the role
+  passwords are marked optional, so a missing one fails the script at once,
+  with a message that names the password file's variable and says that its
+  Secret is missing, instead of leaving the pod waiting until the hook
+  times out.
+- /tmp, where the script writes the admin role's libpq password file, is in
+  memory and leaves with the pod.
+- backoffLimit 0: a failed check fails the same way again, so the Job fails
+  at once, and kubectl logs job/<release>-setup says why. A failed Job is
+  kept for that, until the next install or upgrade that runs the setup
+  replaces it; one that succeeded is deleted.
+
+A hook is not part of the release's manifest, and helm uninstall deletes
+none. When the Job fails, Helm deletes the hooks that ran before it, the
+ConfigMap and the ServiceAccount, by their hook-succeeded policy, and keeps
+the Job; if Helm cannot create the Job, all three stay. The setup's
+ServiceAccount is a hook as well, because the release's own objects are
+created only after its pre-install hooks.
+*/ -}}
+{{- if and (eq .Values.mode "external") .Values.externalDatabase.setup.enabled }}
+{{- $secretDir := include "pubdex.secretDir" . }}
+{{- $setup := .Values.externalDatabase.setup }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "pubdex.setupName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pubdex.labels" (dict "root" $ "component" "setup") | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+automountServiceAccountToken: false
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "pubdex.setupName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pubdex.labels" (dict "root" $ "component" "setup") | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        {{- include "pubdex.labels" (dict "root" $ "component" "setup") | nindent 8 }}
+        {{- with include "pubdex.podLabels" (dict "root" $ "component" "setup") }}{{ . | nindent 8 }}{{ end }}
+      {{- with include "pubdex.podAnnotations" (dict "root" $ "component" "setup") }}
+      annotations:
+        {{- . | nindent 8 }}
+      {{- end }}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ include "pubdex.setupName" . }}
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with include "pubdex.podScheduling" (dict "root" $ "component" "setup") }}{{ . | nindent 6 }}{{ end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        # The group of the Secret files, which are readable by it only.
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: bootstrap
+          image: {{ include "pubdex.image" .Values.image | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python", "-m", "people_pubs.bootstrap", "/var/lib/pubdex/initdb"]
+          securityContext:
+            runAsUser: 10001
+            runAsGroup: 10001
+            {{- include "pubdex.containerSecurityContext" . | nindent 12 }}
+          {{- with $setup.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: initdb
+              mountPath: /var/lib/pubdex/initdb
+            - name: tmp
+              mountPath: /tmp
+      containers:
+        - name: setup
+          image: {{ include "pubdex.image" .Values.postgresImage | quote }}
+          imagePullPolicy: {{ .Values.postgresImage.pullPolicy }}
+          command: ["bash", "/opt/pubdex/setup/external-setup.sh"]
+          env:
+            - name: PGHOST
+              value: {{ include "pubdex.databaseHost" . | quote }}
+            - name: PGPORT
+              value: {{ include "pubdex.databasePort" . | quote }}
+            - name: PGDATABASE
+              value: {{ .Values.database.name | quote }}
+            - name: PGUSER
+              value: {{ $setup.adminUser | quote }}
+            - name: PGSSLMODE
+              value: {{ .Values.externalDatabase.sslmode | quote }}
+            {{- with include "pubdex.sslRootCert" . }}
+            - name: PGSSLROOTCERT
+              value: {{ . | quote }}
+            {{- end }}
+            - name: PEOPLE_PUBS_SETUP_ADMIN_PASSWORD_FILE
+              value: {{ printf "/run/secrets/pubdex-admin/%s" $setup.adminSecret.key | quote }}
+            - name: PEOPLE_PUBS_APP_READONLY_PASSWORD_FILE
+              value: {{ printf "%s/app_readonly_password" $secretDir }}
+            - name: PEOPLE_PUBS_APP_WRITER_PASSWORD_FILE
+              value: {{ printf "%s/app_writer_password" $secretDir }}
+            - name: PEOPLE_PUBS_SETUP_INIT_DIR
+              value: /var/lib/pubdex/initdb
+          securityContext:
+            {{- include "pubdex.containerSecurityContext" . | nindent 12 }}
+          {{- with $setup.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: script
+              mountPath: /opt/pubdex/setup
+              readOnly: true
+            - name: initdb
+              mountPath: /var/lib/pubdex/initdb
+              readOnly: true
+            - name: secrets
+              mountPath: {{ $secretDir }}
+              readOnly: true
+            - name: admin
+              mountPath: /run/secrets/pubdex-admin
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+            {{- with include "pubdex.caMount" . }}{{ . | nindent 12 }}{{ end }}
+      volumes:
+        - name: script
+          configMap:
+            name: {{ include "pubdex.setupName" . }}
+            defaultMode: 0444
+        - name: initdb
+          emptyDir: {}
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Mi
+        # The passwords the two application roles get, readable by the
+        # group 999 only.
+        - name: secrets
+          secret:
+            secretName: {{ include "pubdex.secretName" . | quote }}
+            defaultMode: 0440
+            optional: true
+            items:
+              - key: app_readonly_password
+                path: app_readonly_password
+              - key: app_writer_password
+                path: app_writer_password
+        # The admin role's password: this pod's alone.
+        - name: admin
+          secret:
+            secretName: {{ $setup.adminSecret.name | quote }}
+            defaultMode: 0440
+            optional: true
+            items:
+              - key: {{ $setup.adminSecret.key | quote }}
+                path: {{ $setup.adminSecret.key | quote }}
+        {{- with include "pubdex.caVolume" . }}{{ . | nindent 8 }}{{ end }}
+{{- end }}

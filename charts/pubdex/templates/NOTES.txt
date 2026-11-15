@@ -1,0 +1,120 @@
+PubDex {{ .Chart.AppVersion }} (chart {{ .Chart.Version }}) is installed as release {{ .Release.Name }} in namespace {{ .Release.Namespace }}, in {{ .Values.mode }} mode.
+{{- $ns := .Release.Namespace }}
+{{- $api := include "pubdex.apiName" . }}
+{{- if eq .Values.mode "external" }}
+
+It uses database {{ .Values.database.name }} on the PostgreSQL server {{ include "pubdex.databaseHost" . }}:{{ include "pubdex.databasePort" . }}, with sslmode {{ .Values.externalDatabase.sslmode }}.
+{{- if .Values.externalDatabase.setup.enabled }}
+The setup Job {{ include "pubdex.setupName" . }} prepared it as {{ .Values.externalDatabase.setup.adminUser }} before this
+release's other objects were created; it runs again before every helm upgrade
+and sets the passwords of app_readonly and app_writer from Secret {{ .Values.secrets.name }}.
+Delete the admin Secret until the next install or upgrade needs it:
+
+  kubectl --namespace {{ $ns }} delete secret {{ .Values.externalDatabase.setup.adminSecret.name }}
+{{- else }}
+The chart did not prepare the database (externalDatabase.setup.enabled=false).
+Run charts/pubdex/files/external-setup.sh against it before the read service
+can become ready, and again after each change of the passwords in Secret
+{{ .Values.secrets.name }} (KUBERNETES.md, Installing without the setup Job).
+{{- end }}
+{{- end }}
+
+Wait until the {{ if eq .Values.mode "evaluation" }}database and the {{ end }}read service are ready:
+{{ if eq .Values.mode "evaluation" }}
+  kubectl --namespace {{ $ns }} rollout status statefulset/{{ include "pubdex.postgresqlName" . }} --timeout=5m
+{{- end }}
+  kubectl --namespace {{ $ns }} rollout status deployment/{{ $api }} --timeout=5m
+
+Reach the read service from this machine, through a port forward bound to
+127.0.0.1 only:
+
+  kubectl --namespace {{ $ns }} port-forward service/{{ $api }} 8000:{{ .Values.api.service.port | int64 }}
+  curl http://127.0.0.1:8000/readyz
+  curl http://127.0.0.1:8000/v0/publications
+
+WARNING: the read service has no authentication and no TLS. Every pod that
+can reach Service {{ $api }} can read everything it serves. Exposing
+it outside the cluster, through an Ingress, a LoadBalancer or a NodePort,
+publishes everything it serves to everyone who can reach that address.
+{{- if .Values.networkPolicy.enabled }}
+
+NetworkPolicy {{ $api }} admits to the read service only the pods of
+namespace {{ $ns }} labelled {{ include "pubdex.clientLabel" . }}=true
+{{- if .Values.networkPolicy.api.allowFrom }}, and the peers of
+networkPolicy.api.allowFrom{{ end }}, provided the cluster's network plugin
+enforces NetworkPolicy; otherwise every pod of the cluster can reach it.
+Label a pod that may read it with
+  kubectl --namespace {{ $ns }} label pod <pod> {{ include "pubdex.clientLabel" . }}=true
+{{- else }}
+
+networkPolicy.enabled is false: every pod of the cluster can reach the read
+service{{ if eq .Values.mode "evaluation" }} and the database{{ end }}.
+{{- end }}
+{{- if .Values.ingress.enabled }}
+{{- $tlsHosts := list }}
+{{- range .Values.ingress.tls }}{{ $tlsHosts = concat $tlsHosts .hosts }}{{ end }}
+
+WARNING: Ingress {{ $api }} publishes the read service, which has no
+authentication, to everyone who can reach these addresses:
+{{- range .Values.ingress.hosts }}
+{{- $scheme := ternary "https" "http" (has .host $tlsHosts) }}
+{{- $host := .host }}
+{{- range (.paths | default (list (dict "path" "/"))) }}
+  {{ $scheme }}://{{ $host }}{{ .path }}
+{{- end }}
+{{- end }}
+{{- if not .Values.ingress.tls }}
+No TLS is configured (ingress.tls): these hosts are served by plain HTTP.
+{{- end }}
+{{- if and .Values.networkPolicy.enabled (not .Values.networkPolicy.api.allowFrom) }}
+networkPolicy.api.allowFrom is empty, so NetworkPolicy {{ $api }} does not admit
+the ingress controller's pods: add their namespace there
+(charts/pubdex/examples/values-ingress-tls.yaml).
+{{- end }}
+{{- end }}
+{{- if .Values.demo.enabled }}
+
+The demonstration Job {{ include "pubdex.demoName" . }} has written SYNTHETIC records into this
+release's database: GET /v0/publications serves the DOI
+10.5555/pubdex-fixture-001. Keep this release for trying PubDex out only, and
+uninstall it together with its database volume afterwards.
+{{- end }}
+
+Ingestion runs as app_writer.
+{{- with .Values.ingestion.tasks }}
+{{- $first := "" }}
+The CronJobs of ingestion.tasks:
+{{- range $task, $spec := . }}
+{{- if not $first }}{{ $first = $task }}{{ end }}
+  {{ include "pubdex.ingestName" $ }}-{{ $task }}  {{ if $spec.schedule }}{{ $spec.schedule }}{{ if $spec.suspend }} (suspended){{ end }}{{ else }}on demand{{ end }}
+{{- end }}
+Run one now, and follow its log:
+
+  run={{ $first }}-$(date +%Y%m%d%H%M%S)
+  kubectl --namespace {{ $ns }} create job --from=cronjob/{{ include "pubdex.ingestName" $ }}-{{ $first }} "$run"
+  kubectl --namespace {{ $ns }} logs --follow "job/$run"
+{{- else }}
+ingestion.tasks defines no CronJob.
+{{- end }}
+
+Run one command attached to this terminal, in a pod that is deleted when it
+ends. A roster holds personal data: give it on standard input, as here, and
+never in the values or on the command line:
+
+  kubectl --namespace {{ $ns }} run {{ include "pubdex.runName" . }} -i --rm --restart=Never --quiet \
+    --image={{ include "pubdex.image" .Values.image }} --override-type=json \
+    --overrides="$(kubectl --namespace {{ $ns }} get configmap {{ include "pubdex.runName" . }} -o jsonpath='{.data.overrides}')" \
+    -- python -m people_pubs.sync.add_people --csv - < roster.csv
+{{- if eq .Values.mode "evaluation" }}
+
+The database volume {{ printf "data-%s-0" (include "pubdex.postgresqlName" .) }}
+{{- if .Values.postgresql.persistence.retainOnUninstall }} is kept when the release is uninstalled; a new
+install of the same name uses it again, with its passwords. Delete it with
+  kubectl --namespace {{ $ns }} delete pvc {{ printf "data-%s-0" (include "pubdex.postgresqlName" .) }}
+{{- else }} is deleted with the release.
+{{- end }}
+{{- else }}
+
+helm uninstall leaves the database, its schema and data, and the roles
+app_readonly, app_writer and maintenance on the server.
+{{- end }}

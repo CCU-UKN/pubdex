@@ -1,0 +1,75 @@
+{{- /*
+NetworkPolicies, networkPolicy.enabled. They select the release's pods by
+the release's labels and only restrict what reaches them (policyTypes
+Ingress); what the pods connect to is not restricted. Only a cluster whose
+network plugin enforces NetworkPolicy applies them.
+
+- <release>-postgresql, evaluation mode: PostgreSQL admits TCP 5432 only
+  from the pods of this release that connect to the database -- the read
+  service, the ingestion runs and the attached one-off pod, and the
+  demonstration (pubdex.databaseClients). Its bootstrap is an init
+  container of the same pod and needs no connection.
+- <release>-api: the read service admits TCP 8000 only from pods in the
+  release's namespace labelled <release>-client: "true", and from the peers
+  in networkPolicy.api.allowFrom, such as an ingress controller's
+  namespace.
+
+Neither affects the kubelet's probes, which come from the pod's node, nor
+kubectl port-forward, which the container runtime connects inside the pod.
+*/ -}}
+{{- if .Values.networkPolicy.enabled }}
+{{- if eq .Values.mode "evaluation" }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "pubdex.postgresqlName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pubdex.labels" (dict "root" $ "component" "postgresql") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "pubdex.selectorLabels" (dict "root" $ "component" "postgresql") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ .Chart.Name }}
+              app.kubernetes.io/instance: {{ .Release.Name }}
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values:
+                  {{- include "pubdex.databaseClients" . | fromJsonArray | toYaml | nindent 18 }}
+      ports:
+        - protocol: TCP
+          port: 5432
+---
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "pubdex.apiName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pubdex.labels" (dict "root" $ "component" "api") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "pubdex.selectorLabels" (dict "root" $ "component" "api") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{ include "pubdex.clientLabel" . }}: "true"
+        {{- with .Values.networkPolicy.api.allowFrom }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: 8000
+{{- end }}

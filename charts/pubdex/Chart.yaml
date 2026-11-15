@@ -1,0 +1,23 @@
+apiVersion: v2
+name: pubdex
+description: >-
+  PubDex, an auditable record of what the people of a research organisation
+  have published: its read service and, for evaluation, a PostgreSQL 16
+  database of its own, from the release images.
+type: application
+# The chart's own version, independent of the application's.
+version: 0.1.0
+# The application release whose images the chart uses by default (values.yaml,
+# image and postgresImage).
+appVersion: "0.1.0"
+kubeVersion: ">=1.35.0-0"
+keywords:
+  - publications
+  - bibliometrics
+  - postgresql
+home: https://github.com/CCU-UKN/pubdex
+sources:
+  - https://github.com/CCU-UKN/pubdex
+annotations:
+  # The chart's files are code under the repository's MIT licence (LICENSE).
+  licenses: MIT

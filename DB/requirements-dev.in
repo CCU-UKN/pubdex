@@ -1,5 +1,7 @@
 # DB-local development and test dependencies: the runtime set at the versions
-# requirements.txt locks, plus the test tools.
+# requirements.txt locks, plus the test tools. PyYAML reads the manifests the
+# Helm chart renders, in the chart checks (run_chart_checks.sh).
 -c requirements.txt
 -r requirements.in
 pytest==9.0.3
+pyyaml==6.0.3

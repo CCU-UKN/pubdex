@@ -1,0 +1,23 @@
+{{- /*
+Evaluation mode: the headless Service of the PostgreSQL StatefulSet. Its
+name resolves to the pod's address once the pod is ready; the read service
+connects to it.
+*/ -}}
+{{- if eq .Values.mode "evaluation" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "pubdex.postgresqlName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pubdex.labels" (dict "root" $ "component" "postgresql") | nindent 4 }}
+spec:
+  clusterIP: None
+  selector:
+    {{- include "pubdex.selectorLabels" (dict "root" $ "component" "postgresql") | nindent 4 }}
+  ports:
+    - name: postgresql
+      port: 5432
+      targetPort: postgresql
+      protocol: TCP
+{{- end }}

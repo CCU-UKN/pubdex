@@ -1,0 +1,67 @@
+{{- /*
+The attached one-off pod: an ingestion command whose standard input and
+output are the operator's terminal, in a pod that kubectl deletes when the
+command ends. The roster import uses it, so that a roster reaches only the
+container's standard input -- never the values, a ConfigMap, a Secret, the
+chart, Helm's release history or a command line:
+
+  kubectl run <release>-run -i --rm --restart=Never --quiet --image=<image> \
+    --override-type=json \
+    --overrides="$(kubectl get configmap <release>-run -o jsonpath='{.data.overrides}')" \
+    -- python -m people_pubs.sync.add_people --csv - < roster.csv
+
+kubectl run builds a pod with one container that runs the arguments after
+"--", with its standard input open; the JSON patch in this ConfigMap then
+gives it what pubdex.writerPodSecurityContext and the helpers after it give
+the CronJobs' runs: the image, the release's labels (the NetworkPolicy
+admits the pod to PostgreSQL by them), the restricted security context,
+libpq's settings from the release's ConfigMap and app_writer's password
+file, and no other credential; and, when they are set, the pod labels,
+annotations and scheduling fields of the values' top level (pubdex.podValues).
+Every operation is an "add", which sets a
+field whether or not kubectl has set it, so the patch does not depend on
+the pod kubectl builds beyond its first container. The command itself stays
+on kubectl's command line. NOTES.txt prints the command for the release.
+
+The ConfigMap holds no setting and no credential: only that patch.
+*/ -}}
+{{- $ops := list -}}
+{{- range $key, $value := include "pubdex.selectorLabels" (dict "root" $ "component" "ingest") | fromYaml -}}
+{{- $ops = append $ops (dict "op" "add" "path" (printf "/metadata/labels/%s" ($key | replace "~" "~0" | replace "/" "~1")) "value" $value) -}}
+{{- end -}}
+{{- $pod := include "pubdex.podValues" (dict "root" $ "component" "ingest") | fromJson -}}
+{{- range $key := keys ($pod.podLabels | default dict) | sortAlpha -}}
+{{- $ops = append $ops (dict "op" "add" "path" (printf "/metadata/labels/%s" ($key | replace "~" "~0" | replace "/" "~1")) "value" (index $pod.podLabels $key)) -}}
+{{- end -}}
+{{- with $pod.podAnnotations -}}
+{{- $ops = append $ops (dict "op" "add" "path" "/metadata/annotations" "value" .) -}}
+{{- end -}}
+{{- range $field := list "nodeSelector" "tolerations" "affinity" "priorityClassName" -}}
+{{- with index $pod $field -}}
+{{- $ops = append $ops (dict "op" "add" "path" (printf "/spec/%s" $field) "value" .) -}}
+{{- end -}}
+{{- end -}}
+{{- $ops = append $ops (dict "op" "add" "path" "/spec/restartPolicy" "value" "Never") -}}
+{{- $ops = append $ops (dict "op" "add" "path" "/spec/serviceAccountName" "value" (include "pubdex.ingestName" .)) -}}
+{{- $ops = append $ops (dict "op" "add" "path" "/spec/automountServiceAccountToken" "value" false) -}}
+{{- $ops = append $ops (dict "op" "add" "path" "/spec/enableServiceLinks" "value" false) -}}
+{{- with .Values.imagePullSecrets -}}
+{{- $ops = append $ops (dict "op" "add" "path" "/spec/imagePullSecrets" "value" .) -}}
+{{- end -}}
+{{- $ops = append $ops (dict "op" "add" "path" "/spec/securityContext" "value" (include "pubdex.writerPodSecurityContext" . | fromYaml)) -}}
+{{- $ops = append $ops (dict "op" "add" "path" "/spec/volumes" "value" (include "pubdex.writerVolumes" . | fromYamlArray)) -}}
+{{- $ops = append $ops (dict "op" "add" "path" "/spec/containers/0/image" "value" (include "pubdex.image" .Values.image)) -}}
+{{- $ops = append $ops (dict "op" "add" "path" "/spec/containers/0/imagePullPolicy" "value" .Values.image.pullPolicy) -}}
+{{- $ops = append $ops (dict "op" "add" "path" "/spec/containers/0/env" "value" (include "pubdex.writerEnv" . | fromYamlArray)) -}}
+{{- $ops = append $ops (dict "op" "add" "path" "/spec/containers/0/securityContext" "value" (include "pubdex.containerSecurityContext" . | fromYaml)) -}}
+{{- $ops = append $ops (dict "op" "add" "path" "/spec/containers/0/resources" "value" (.Values.ingestion.resources | default dict)) -}}
+{{- $ops = append $ops (dict "op" "add" "path" "/spec/containers/0/volumeMounts" "value" (include "pubdex.writerVolumeMounts" . | fromYamlArray)) }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "pubdex.runName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pubdex.labels" (dict "root" $ "component" "ingest") | nindent 4 }}
+data:
+  overrides: {{ $ops | toJson | quote }}

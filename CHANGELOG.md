@@ -9,6 +9,172 @@ repository, and prototype functionality included here is not claimed as funded
 work; the entries below describe the funded results built on top of it.
 Background: [Origins and funding](README.md).
 
+## Unreleased — Helm chart, chart version 0.1.0
+
+Task 2b: a Helm chart for both a self-contained evaluation deployment and an
+installation with external PostgreSQL, with documented values, Secret and
+ConfigMap patterns, ingress and TLS examples, and instructions for install,
+upgrade, rollback and uninstall; its templates linted and tested offline,
+and an install-and-upgrade test on an ephemeral cluster, as stages 8 and 9
+of the complete suite. The chart is version 0.1.0 and its `appVersion` is
+0.1.0: by default it runs the published 0.1.0 images by digest. Neither
+image changed, so the application stays at version 0.1.0
+([`VERSION`](VERSION)). The chart is provided in this repository only; no
+chart package is published. External acceptance of the task is not
+asserted.
+
+### The chart
+
+- [`charts/pubdex/`](charts/pubdex/) has two modes. `evaluation` also runs
+  PostgreSQL 16 as a single-replica StatefulSet with a volume of its own,
+  for trying PubDex out with synthetic or disposable data; `external` uses
+  a PostgreSQL 16 server the operator runs, the mode for real data.
+  [`values.yaml`](charts/pubdex/values.yaml) documents every value with
+  its default, and [`values.schema.json`](charts/pubdex/values.schema.json)
+  refuses unknown keys, values of the wrong form, any key named like a
+  password and contradictory settings. `kubeVersion` requires Kubernetes
+  1.35 or later.
+- Every pod meets Pod Security `restricted`. PostgreSQL runs as uid 999
+  with a read-only root file system, its data in a subdirectory of the
+  volume, an in-memory `/dev/shm` and the image's stop signal; an
+  initContainer copies the schema from the application image, as
+  `compose.yaml`'s `bootstrap` service does.
+- **Secrets.** The chart takes no password and generates none, so none
+  reaches the values, the rendered manifests or Helm's release history. The
+  operator creates one Secret from the files of `create_secrets.sh`, and
+  each container mounts only its own keys, mode 0440. Non-secret settings
+  are in a ConfigMap whose checksum rolls the read service on a change.
+- **External mode.** A `pre-install,pre-upgrade` hook Job runs
+  [`files/external-setup.sh`](charts/pubdex/files/external-setup.sh) in the
+  PostgreSQL image as a client, with an admin Secret that no other pod
+  mounts. It checks the server and the admin role's privileges before any
+  change, applies the schema in one transaction to a database without it,
+  sets both role passwords as SCRAM verifiers computed in the client,
+  revokes `CONNECT` and `TEMPORARY` from `PUBLIC`, and has each role log in
+  again. Every connection it makes, the admin role's included, requires
+  SCRAM authentication, so it sends no password in clear text or as an MD5
+  hash. An admin role with `CREATEROLE` that owns the database suffices;
+  the setup leaves out the three lines of `000_init.sql` that need a
+  superuser, so the images stay unchanged. One installation per server.
+  The connections use `sslmode` `verify-full` by default, which checks the
+  server against a CA certificate the operator provides in a Secret or
+  ConfigMap; a weaker mode has to be set explicitly. A routine upgrade, one
+  that changes no password, turns the setup off on the command line and
+  needs no admin Secret. With the setup turned off for the install, the
+  operator runs the same script by hand.
+- **Scheduling and pod metadata.** `nodeSelector`, `tolerations`,
+  `affinity`, `podAnnotations`, `podLabels` and `priorityClassName` apply
+  to every pod of the release; the same keys under `api` and `postgresql`
+  replace the top-level value for that component's pods, never merge with
+  it. Labels and annotations the chart sets itself are refused.
+- **Ingestion.** Each entry of `ingestion.tasks` becomes a CronJob, which
+  is suspended unless it has a schedule and runs on demand as a Job. A
+  one-off pod attached to the terminal gets the release's settings from a
+  JSON patch in a ConfigMap; a roster reaches it on standard input only,
+  never through values, a ConfigMap or a command line. The synthetic
+  demonstration runs as a `post-install` hook in evaluation mode.
+- **Network.** An Ingress, off by default, with two examples, one with a
+  TLS Secret of the operator's and one with a certificate manager's
+  annotation; the values, the examples, the notes and the guide warn that
+  it publishes a service without authentication. NetworkPolicies, on by
+  default, admit connections to PostgreSQL only from the release's pods and
+  to the read service only from labelled clients and configured peers.
+- `helm test` asks the read service for `/readyz` and the first page of
+  publications from a restricted pod.
+
+### The operator guide
+
+[`KUBERNETES.md`](KUBERNETES.md) covers what an installation needs, the
+supported platforms and how each was established, a short path from a
+clone to the demonstration, external PostgreSQL, the values, scheduling,
+Secrets and password changes, settings, ingestion and roster import,
+ingress and TLS, NetworkPolicy, health and readiness, upgrade, rollback,
+uninstall, backup and restore, what identifies a deployment, and
+troubleshooting. Kubernetes 1.35 and 1.37 are supported because the
+guide's commands ran on both, and 1.36 by API compatibility. An appendix
+names, for every block of commands, the steps of the cluster acceptance
+test that ran it, or says that only stage 8 rendered it, that it ran once
+outside the suite, or that nothing ran it;
+[`DB/tests/test_kubernetes_guide.py`](DB/tests/test_kubernetes_guide.py)
+checks the appendix against the script, step by step, and the table of
+values against `values.yaml`. [`README.md`](README.md), [`DEPLOYMENT.md`](DEPLOYMENT.md)
+and [`DB/TESTING_STRATEGY.md`](DB/TESTING_STRATEGY.md) point to it;
+Compose stays the canonical deployment on one host.
+
+The guide states when the supported Kubernetes releases are established
+again: at each PubDex release, on the newest Kubernetes release and the
+oldest one the Kubernetes project maintains, both run by stage 9. Between
+releases the table stands as dated; a newer Kubernetes installs with the
+status *not known*, and one older than the floor is refused. It describes
+an upgrade without the admin Secret as stage 9 observed it: it fails
+within seconds and leaves the running release as it was. Only the failed
+setup's Job stays, and the guide's deletion block, which stage 9 runs,
+removes it. It explains what a `namespaceSelector` does for an ingress
+controller with `hostNetwork: true`, and that `networkPolicy.api.allowFrom`
+takes an `ipBlock`. The guide, the `retainOnUninstall` comment and the
+install notes say that a kept database volume keeps the passwords it was
+initialised with, and the guide's troubleshooting gives the two ways out.
+
+### Checks
+
+- [`setup_cluster_tools.sh`](setup_cluster_tools.sh) installs helm 4.3.1,
+  kubectl 1.36.6 and kind 0.33.0 under `.tools/`, as
+  [`DB/lib/cluster_tools.sh`](DB/lib/cluster_tools.sh) pins them by URL and
+  SHA-256, with the kind node images for Kubernetes 1.37.0 and 1.35.8 by
+  digest. The checks use only these, never a tool on `PATH` or preinstalled
+  on a CI runner, and no script names a GitHub address.
+- Stage 8, [`run_chart_checks.sh`](run_chart_checks.sh): `helm lint
+  --strict` for Kubernetes 1.35.0 and 1.37.0, and the tests in
+  [`charts/tests/`](charts/tests/) on every values file and example:
+  Pod Security, credentials, objects, values, external mode, ingestion,
+  network, and refused values. PyYAML joined the development lock.
+- Stage 9, [`run_cluster_acceptance.sh`](run_cluster_acceptance.sh): two
+  kind clusters of the run's own, one after the other, each on a Docker
+  network of its own and with its own kubeconfig, which it checks before
+  any kubectl or helm call. On Kubernetes 1.37, in evaluation mode, it
+  installs the published images with the demonstration, reads the
+  publication, runs `helm test`, upgrades to the images built from the
+  checkout and rolls back, changes every password, takes the database away
+  and back for readiness, observes the NetworkPolicy and uninstalls. In
+  external mode, against a PostgreSQL 16 server of its own with TLS and a
+  non-superuser admin role, it installs with the setup Job, imports the
+  synthetic roster on standard input, upgrades, changes the role passwords,
+  has an upgrade without the admin Secret that leaves the setup on fail,
+  runs a routine upgrade and a rollback without the admin Secret, and
+  uninstalls; the API server's replayed watch shows that the routine
+  upgrade, the rollback and the uninstall ran no setup. On Kubernetes 1.35,
+  a user holding only the rights the guide lists installs, tests, upgrades,
+  rolls back and uninstalls evaluation mode, the kubelet pulling the
+  published images, and the API server's audit log shows none of that
+  user's requests refused. Stage 9 has the API servers of Kubernetes 1.37
+  and 1.35 admit, in server-side dry runs, the objects of both ingress
+  examples and of values that set the six scheduling keys. It runs `helm
+  get notes`, `helm get values --all`, `kubectl label pod`, `kubectl logs
+  --follow` and the export through the attached pod; KUBERNETES.md names
+  the step for each. Every step runs on every run. Its cleanup removes
+  everything it created and confirms it. The testing strategy states that
+  stage 9's upgrade steps assume the schema of the published release whose
+  images revision 1 runs.
+- The workflows install the pinned tools before the suite, which now has
+  nine stages, and give the job 40 minutes: 1.5 times an estimate of about
+  24 minutes on a hosted runner, rounded up to a multiple of 5. Offline
+  tests cover the three new scripts with stub tools.
+- The offline tests that watch a running script, those of the Compose,
+  operator, disposable-integration and schema-bootstrap scripts, read the
+  stubs' call log only up to its last complete line: a line a stub was
+  still writing could fail such a test.
+
+### Verification
+
+On 2026-11-16 all nine stages passed locally on this tree in 851 seconds,
+with Kubernetes 1.37.0 and 1.35.8 on kind for stage 9, apart from this
+entry, [`TASK_2B.md`](TASK_2B.md) and
+[`DB/TESTING_STRATEGY.md`](DB/TESTING_STRATEGY.md), which were written after
+that run and passed stage 1 afterwards. A run from a clean clone of the
+commit that publishes this entry, and public CI of it, are recorded in a
+follow-up. [`TASK_2B.md`](TASK_2B.md) is the requirement-by-requirement
+record.
+
 ## Container image and Compose deployment — version 0.1.0 published 2026-11-03
 
 Task 2a: a versioned container image for the ingestion and API service, and a

@@ -189,6 +189,13 @@ def _executable(path: Path, text: str) -> None:
     path.chmod(0o755)
 
 
+def _finished_lines(path: Path) -> list:
+    """The lines the stub has finished writing: the tests poll the log while
+    the run goes on, so the last line may still lack its newline."""
+    data = path.read_bytes()
+    return data[:data.rfind(b"\n") + 1].decode("utf-8").splitlines()
+
+
 def _demo_checkout(root: Path) -> Path:
     """A scratch checkout holding the real demonstration, stub init scripts and
     a recording interpreter; returns the demonstration's path."""
@@ -242,7 +249,7 @@ class _Run:
     def calls(self) -> list[list[str]]:
         if not self.log.exists():
             return []
-        return [json.loads(line) for line in self.log.read_text(encoding="utf-8").splitlines()]
+        return [json.loads(line) for line in _finished_lines(self.log)]
 
     def inventory(self) -> dict:
         if not self.state.exists():

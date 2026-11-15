@@ -1,0 +1,31 @@
+# External mode with the database prepared by hand, so without a setup Job:
+# verify-ca with the CA certificate from a Secret under another key, another
+# port and database, images by tag only, two read service pods, an ingestion
+# task on demand, which connects with that CA certificate, and no
+# NetworkPolicy.
+mode: external
+image:
+  digest: ""
+postgresImage:
+  digest: ""
+secrets:
+  name: manual-credentials
+database:
+  name: manual_db
+externalDatabase:
+  host: postgres.db.example.org
+  port: 6432
+  sslmode: verify-ca
+  caCertificate:
+    secretName: manual-db-ca
+    key: root.crt
+  setup:
+    enabled: false
+api:
+  replicas: 2
+ingestion:
+  tasks:
+    export:
+      command: [python, -m, people_pubs.sync.export_publications]
+networkPolicy:
+  enabled: false

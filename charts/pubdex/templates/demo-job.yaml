@@ -1,0 +1,89 @@
+{{- /*
+The synthetic demonstration, demo.enabled, evaluation mode only
+(pubdex.checkValues refuses it in external mode): the three commands of
+compose.yaml's demo service, as app_writer with that role's password file
+and no other credential. It WRITES SYNTHETIC RECORDS into the release's
+database.
+
+- A post-install hook: it runs once, after helm install has created the
+  release's objects, and never after an upgrade, so its Job is never
+  changed in place. helm install waits for it, and fails when it fails.
+- helm install does not wait for PostgreSQL to be ready before it starts
+  the hook, so the Job first waits, up to five minutes, until app_writer
+  can log in; on a first start that is after the database's
+  initialisation.
+- Not retried (backoffLimit 0). A Job that succeeded is deleted; one that
+  failed is kept for kubectl logs job/<release>-demo, until the next
+  install replaces it, and helm uninstall does not delete it.
+*/ -}}
+{{- if .Values.demo.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "pubdex.demoName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pubdex.labels" (dict "root" $ "component" "demo") | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        {{- include "pubdex.labels" (dict "root" $ "component" "demo") | nindent 8 }}
+        {{- with include "pubdex.podLabels" (dict "root" $ "component" "demo") }}{{ . | nindent 8 }}{{ end }}
+      {{- with include "pubdex.podAnnotations" (dict "root" $ "component" "demo") }}
+      annotations:
+        {{- . | nindent 8 }}
+      {{- end }}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ include "pubdex.ingestName" . }}
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with include "pubdex.podScheduling" (dict "root" $ "component" "demo") }}{{ . | nindent 6 }}{{ end }}
+      securityContext:
+        {{- include "pubdex.writerPodSecurityContext" . | nindent 8 }}
+      containers:
+        - name: demo
+          image: {{ include "pubdex.image" .Values.image | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              tries=0
+              until python -c 'from people_pubs.db.connection import get_conn; get_conn().close()' 2>/tmp/connect.err; do
+                tries=$((tries + 1))
+                if [ "$tries" -ge 150 ]; then
+                  echo "demo: app_writer could not log in to the database within five minutes:" >&2
+                  cat /tmp/connect.err >&2
+                  exit 1
+                fi
+                sleep 2
+              done
+              python -m people_pubs.sync.add_people --csv tests/fixtures/golden/demo_roster_minimal.csv --no-orcid-lookup
+              python -m people_pubs.sync.fixture_demo
+              python -m people_pubs.sync.attribution_rules add --affiliation "Synthetic Institute for Collective Behaviour"
+          env:
+            {{- include "pubdex.writerEnv" . | nindent 12 }}
+          securityContext:
+            {{- include "pubdex.containerSecurityContext" . | nindent 12 }}
+          {{- with .Values.ingestion.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            {{- include "pubdex.writerVolumeMounts" . | nindent 12 }}
+      volumes:
+        {{- include "pubdex.writerVolumes" . | nindent 8 }}
+{{- end }}

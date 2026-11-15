@@ -1,0 +1,46 @@
+# Evaluation mode with the read service published through an Ingress, with
+# TLS from a Secret you create.
+#
+# WARNING: the read service has no authentication. This Ingress publishes
+# everything it serves to everyone who can reach pubdex.example.org. Put
+# authentication in front of it, or keep the host private.
+#
+# Before the install, in the release's namespace:
+#
+#   ./create_secrets.sh
+#   kubectl create secret generic pubdex-credentials \
+#     --from-file=secrets/postgres_password \
+#     --from-file=secrets/app_readonly_password \
+#     --from-file=secrets/app_writer_password
+#   kubectl create secret tls pubdex-tls --cert=<certificate chain> --key=<private key>
+#
+# The certificate has to name pubdex.example.org. Replace the host, and the
+# namespace of your ingress controller below, then, from the repository's
+# root:
+#
+#   helm install pubdex charts/pubdex --values charts/pubdex/examples/values-ingress-tls.yaml
+secrets:
+  name: pubdex-credentials
+ingress:
+  enabled: true
+  # "" uses the cluster's default IngressClass; kubectl get ingressclass
+  # lists the others.
+  className: ""
+  hosts:
+    - host: pubdex.example.org
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: pubdex-tls
+      hosts:
+        - pubdex.example.org
+networkPolicy:
+  enabled: true
+  api:
+    # The read service admits the ingress controller's pods: those of its
+    # namespace, by the name label Kubernetes gives every namespace.
+    allowFrom:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: ingress-controller

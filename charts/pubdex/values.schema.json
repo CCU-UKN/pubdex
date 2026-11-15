@@ -1,0 +1,529 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Values of the PubDex chart",
+  "description": "Every key of values.yaml with its type and form. Unknown keys are refused at every level, so a mistyped key fails instead of being ignored, and no key can carry a password.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["mode", "image", "postgresImage", "imagePullSecrets", "nodeSelector", "tolerations", "affinity", "podAnnotations", "podLabels", "priorityClassName", "secrets", "database", "postgresql", "externalDatabase", "api", "ingestion", "demo", "ingress", "networkPolicy"],
+  "allOf": [
+    {
+      "description": "Evaluation mode runs its own server: a host or a CA certificate of another one contradicts it.",
+      "if": {"properties": {"mode": {"const": "evaluation"}}},
+      "then": {
+        "properties": {
+          "externalDatabase": {
+            "properties": {
+              "host": {"const": ""},
+              "caCertificate": {"$ref": "#/$defs/noCaCertificate"}
+            }
+          }
+        }
+      }
+    },
+    {
+      "description": "Only verify-ca and verify-full check a certificate: a CA certificate contradicts the other modes.",
+      "if": {
+        "properties": {
+          "externalDatabase": {
+            "properties": {"sslmode": {"enum": ["disable", "allow", "prefer", "require"]}}
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "externalDatabase": {
+            "properties": {"caCertificate": {"$ref": "#/$defs/noCaCertificate"}}
+          }
+        }
+      }
+    }
+  ],
+  "properties": {
+    "mode": {
+      "description": "How the chart provides the database.",
+      "enum": ["evaluation", "external"]
+    },
+    "image": {"$ref": "#/$defs/image"},
+    "postgresImage": {"$ref": "#/$defs/image"},
+    "imagePullSecrets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name"],
+        "properties": {
+          "name": {"$ref": "#/$defs/resourceName"}
+        }
+      }
+    },
+    "nodeSelector": {"$ref": "#/$defs/nodeSelector"},
+    "tolerations": {"$ref": "#/$defs/tolerations"},
+    "affinity": {"$ref": "#/$defs/affinity"},
+    "podAnnotations": {"$ref": "#/$defs/annotations"},
+    "podLabels": {"$ref": "#/$defs/labels"},
+    "priorityClassName": {"$ref": "#/$defs/priorityClassName"},
+    "secrets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "description": "Name of the operator-created Secret; empty until set, which rendering refuses with instructions.",
+          "anyOf": [
+            {"const": ""},
+            {"$ref": "#/$defs/resourceName"}
+          ]
+        }
+      }
+    },
+    "database": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z_][a-z0-9_]{0,62}$"
+        }
+      }
+    },
+    "postgresql": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["persistence", "shmSize", "terminationGracePeriodSeconds", "resources"],
+      "properties": {
+        "persistence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["size", "storageClass", "retainOnUninstall"],
+          "properties": {
+            "size": {"$ref": "#/$defs/byteQuantity"},
+            "storageClass": {
+              "anyOf": [
+                {"const": ""},
+                {"$ref": "#/$defs/resourceName"}
+              ]
+            },
+            "retainOnUninstall": {"type": "boolean"}
+          }
+        },
+        "shmSize": {"$ref": "#/$defs/byteQuantity"},
+        "terminationGracePeriodSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3600
+        },
+        "resources": {"$ref": "#/$defs/resources"},
+        "nodeSelector": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/nodeSelector"}]},
+        "tolerations": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/tolerations"}]},
+        "affinity": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/affinity"}]},
+        "podAnnotations": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/annotations"}]},
+        "podLabels": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/labels"}]},
+        "priorityClassName": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/priorityClassName"}]}
+      }
+    },
+    "externalDatabase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["host", "port", "sslmode", "caCertificate", "setup"],
+      "properties": {
+        "host": {
+          "description": "Host name or address of the server; empty in evaluation mode. No spaces, quotes or equals signs: it becomes part of a libpq connection string.",
+          "type": "string",
+          "maxLength": 253,
+          "pattern": "^[A-Za-z0-9._:-]*$"
+        },
+        "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "sslmode": {
+          "description": "libpq's sslmode. verify-full by default, which needs caCertificate, as verify-ca does; rendering fails without it. A weaker mode is the operator's explicit choice.",
+          "enum": ["disable", "allow", "prefer", "require", "verify-ca", "verify-full"]
+        },
+        "caCertificate": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["secretName", "configMapName", "key"],
+          "properties": {
+            "secretName": {"anyOf": [{"const": ""}, {"$ref": "#/$defs/resourceName"}]},
+            "configMapName": {"anyOf": [{"const": ""}, {"$ref": "#/$defs/resourceName"}]},
+            "key": {"$ref": "#/$defs/objectKey"}
+          },
+          "not": {
+            "description": "One source: a Secret or a ConfigMap, not both.",
+            "required": ["secretName", "configMapName"],
+            "properties": {
+              "secretName": {"minLength": 1},
+              "configMapName": {"minLength": 1}
+            }
+          }
+        },
+        "setup": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "adminUser", "adminSecret", "resources"],
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "adminUser": {
+              "description": "The role that prepares the database; never one of the roles the setup creates.",
+              "type": "string",
+              "maxLength": 63,
+              "pattern": "^([A-Za-z0-9_][A-Za-z0-9_.@$-]*)?$",
+              "not": {"enum": ["app_readonly", "app_writer", "maintenance"]}
+            },
+            "adminSecret": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["name", "key"],
+              "properties": {
+                "name": {"anyOf": [{"const": ""}, {"$ref": "#/$defs/resourceName"}]},
+                "key": {"$ref": "#/$defs/objectKey"}
+              }
+            },
+            "resources": {"$ref": "#/$defs/resources"}
+          }
+        }
+      }
+    },
+    "api": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["replicas", "logLevel", "poolSize", "dbWaitSeconds", "statementTimeoutMs", "resources", "service"],
+      "properties": {
+        "replicas": {"type": "integer", "minimum": 0},
+        "logLevel": {"enum": ["DEBUG", "INFO", "WARNING", "ERROR"]},
+        "poolSize": {"type": "integer", "minimum": 1, "maximum": 32},
+        "dbWaitSeconds": {"type": "integer", "minimum": 1, "maximum": 300},
+        "statementTimeoutMs": {"type": "integer", "minimum": 100, "maximum": 600000},
+        "resources": {"$ref": "#/$defs/resources"},
+        "nodeSelector": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/nodeSelector"}]},
+        "tolerations": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/tolerations"}]},
+        "affinity": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/affinity"}]},
+        "podAnnotations": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/annotations"}]},
+        "podLabels": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/labels"}]},
+        "priorityClassName": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/priorityClassName"}]},
+        "service": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["port"],
+          "properties": {
+            "port": {"type": "integer", "minimum": 1, "maximum": 65535}
+          }
+        }
+      }
+    },
+    "ingestion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["crossrefMailto", "orgPatterns", "resources", "tasks"],
+      "properties": {
+        "crossrefMailto": {"$ref": "#/$defs/singleLine"},
+        "orgPatterns": {"$ref": "#/$defs/singleLine"},
+        "resources": {"$ref": "#/$defs/resources"},
+        "tasks": {
+          "description": "One CronJob per entry, named <release>-ingest-<task>.",
+          "type": "object",
+          "propertyNames": {"type": "string", "maxLength": 43, "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"},
+          "additionalProperties": {"$ref": "#/$defs/task"}
+        }
+      }
+    },
+    "demo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled"],
+      "properties": {
+        "enabled": {"type": "boolean"}
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "className", "annotations", "hosts", "tls"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "className": {"anyOf": [{"const": ""}, {"$ref": "#/$defs/resourceName"}]},
+        "annotations": {"$ref": "#/$defs/annotations"},
+        "hosts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["host"],
+            "properties": {
+              "host": {"$ref": "#/$defs/hostName"},
+              "paths": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["path", "pathType"],
+                  "properties": {
+                    "path": {"type": "string", "maxLength": 1024, "pattern": "^/[^\\s]*$"},
+                    "pathType": {"enum": ["Prefix", "Exact", "ImplementationSpecific"]}
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tls": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["secretName", "hosts"],
+            "properties": {
+              "secretName": {"$ref": "#/$defs/resourceName"},
+              "hosts": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/hostName"}}
+            }
+          }
+        }
+      },
+      "if": {"properties": {"enabled": {"const": true}}},
+      "then": {"properties": {"hosts": {"minItems": 1}}}
+    },
+    "networkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "api"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "api": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["allowFrom"],
+          "properties": {
+            "allowFrom": {"type": "array", "items": {"$ref": "#/$defs/networkPolicyPeer"}}
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command"],
+      "properties": {
+        "command": {
+          "description": "python -m people_pubs.sync.<command> and its arguments, each a string.",
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 64,
+          "prefixItems": [
+            {"const": "python"},
+            {"const": "-m"},
+            {"type": "string", "pattern": "^people_pubs\\.sync\\.[a-z][a-z0-9_]*$"}
+          ],
+          "items": {"$ref": "#/$defs/singleLine"}
+        },
+        "schedule": {
+          "description": "A cron schedule of five fields or a macro such as @daily; empty for on demand only.",
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^(@(yearly|annually|monthly|weekly|daily|midnight|hourly)|[0-9*/,?-]+( +[0-9A-Za-z*/,?-]+){4})?$"
+        },
+        "suspend": {"type": "boolean"},
+        "activeDeadlineSeconds": {"type": "integer", "minimum": 1}
+      }
+    },
+    "hostName": {
+      "description": "A DNS name, optionally with a leading wildcard label.",
+      "type": "string",
+      "maxLength": 253,
+      "pattern": "^(\\*\\.)?[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+    },
+    "qualifiedName": {
+      "description": "A label or annotation key: an optional DNS prefix and a slash, then a name of up to 63 characters.",
+      "type": "string",
+      "maxLength": 317,
+      "pattern": "^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$"
+    },
+    "annotations": {
+      "type": "object",
+      "propertyNames": {"$ref": "#/$defs/qualifiedName"},
+      "additionalProperties": {"type": "string"}
+    },
+    "labels": {
+      "type": "object",
+      "propertyNames": {"$ref": "#/$defs/qualifiedName"},
+      "additionalProperties": {"type": "string", "maxLength": 63, "pattern": "^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?$"}
+    },
+    "labelSelector": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "matchLabels": {"$ref": "#/$defs/labels"},
+        "matchExpressions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["key", "operator"],
+            "properties": {
+              "key": {"$ref": "#/$defs/qualifiedName"},
+              "operator": {"enum": ["In", "NotIn", "Exists", "DoesNotExist"]},
+              "values": {"type": "array", "items": {"type": "string", "maxLength": 63}}
+            }
+          }
+        }
+      }
+    },
+    "networkPolicyPeer": {
+      "description": "A NetworkPolicy \"from\" entry: pods, namespaces, or an address block.",
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "podSelector": {"$ref": "#/$defs/labelSelector"},
+        "namespaceSelector": {"$ref": "#/$defs/labelSelector"},
+        "ipBlock": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cidr"],
+          "properties": {
+            "cidr": {"$ref": "#/$defs/cidr"},
+            "except": {"type": "array", "items": {"$ref": "#/$defs/cidr"}}
+          }
+        }
+      },
+      "not": {
+        "description": "An address block stands alone.",
+        "required": ["ipBlock"],
+        "anyOf": [{"required": ["podSelector"]}, {"required": ["namespaceSelector"]}]
+      }
+    },
+    "cidr": {
+      "type": "string",
+      "maxLength": 43,
+      "pattern": "^[0-9A-Fa-f:.]+/[0-9]{1,3}$"
+    },
+    "noCaCertificate": {
+      "properties": {
+        "secretName": {"const": ""},
+        "configMapName": {"const": ""}
+      }
+    },
+    "nodeSelector": {
+      "description": "Node labels a node needs to run the pods.",
+      "$ref": "#/$defs/labels"
+    },
+    "tolerations": {
+      "description": "Kubernetes tolerations of node taints.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "key": {"anyOf": [{"const": ""}, {"$ref": "#/$defs/qualifiedName"}]},
+          "operator": {"enum": ["Exists", "Equal"]},
+          "value": {"type": "string", "maxLength": 63, "pattern": "^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?$"},
+          "effect": {"enum": ["", "NoSchedule", "PreferNoSchedule", "NoExecute"]},
+          "tolerationSeconds": {"type": "integer"}
+        }
+      }
+    },
+    "affinity": {
+      "description": "A Kubernetes affinity; Kubernetes checks the terms below these keys.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "nodeAffinity": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "requiredDuringSchedulingIgnoredDuringExecution": {"type": "object"},
+            "preferredDuringSchedulingIgnoredDuringExecution": {"type": "array", "items": {"type": "object"}}
+          }
+        },
+        "podAffinity": {"$ref": "#/$defs/podAffinity"},
+        "podAntiAffinity": {"$ref": "#/$defs/podAffinity"}
+      }
+    },
+    "podAffinity": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requiredDuringSchedulingIgnoredDuringExecution": {"type": "array", "items": {"type": "object"}},
+        "preferredDuringSchedulingIgnoredDuringExecution": {"type": "array", "items": {"type": "object"}}
+      }
+    },
+    "priorityClassName": {
+      "description": "The name of a PriorityClass; empty for the cluster's default priority.",
+      "anyOf": [{"const": ""}, {"$ref": "#/$defs/resourceName"}]
+    },
+    "objectKey": {
+      "description": "A key of a Secret or ConfigMap.",
+      "type": "string",
+      "maxLength": 253,
+      "pattern": "^[-._a-zA-Z0-9]+$"
+    },
+    "resourceName": {
+      "description": "A Kubernetes object name (DNS subdomain).",
+      "type": "string",
+      "maxLength": 253,
+      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+    },
+    "singleLine": {
+      "type": "string",
+      "maxLength": 1024,
+      "pattern": "^[^\\r\\n]*$"
+    },
+    "byteQuantity": {
+      "description": "A Kubernetes quantity of bytes, such as 256Mi or 8Gi.",
+      "type": "string",
+      "pattern": "^[1-9][0-9]*(Ki|Mi|Gi|Ti|k|M|G|T)?$"
+    },
+    "quantities": {
+      "type": "object",
+      "propertyNames": {"enum": ["cpu", "memory", "ephemeral-storage"]},
+      "additionalProperties": {
+        "anyOf": [
+          {"type": "string", "pattern": "^[0-9]+(\\.[0-9]+)?(m|k|M|G|T|P|E|Ki|Mi|Gi|Ti|Pi|Ei)?$"},
+          {"type": "number", "minimum": 0}
+        ]
+      }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requests": {"$ref": "#/$defs/quantities"},
+        "limits": {"$ref": "#/$defs/quantities"}
+      }
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["registry", "repository", "tag", "digest", "pullPolicy"],
+      "properties": {
+        "registry": {
+          "description": "Registry host, with an optional port; empty for none.",
+          "type": "string",
+          "pattern": "^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*(:[0-9]{1,5})?)?$"
+        },
+        "repository": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "pattern": "^[a-z0-9]+([._-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)*$"
+        },
+        "tag": {
+          "description": "Image tag; empty for none, which needs a digest.",
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?$"
+        },
+        "digest": {
+          "description": "Image digest; empty to pull by tag.",
+          "type": "string",
+          "pattern": "^(sha256:[0-9a-f]{64})?$"
+        },
+        "pullPolicy": {"enum": ["Always", "IfNotPresent", "Never"]}
+      },
+      "anyOf": [
+        {"properties": {"tag": {"minLength": 1}}},
+        {"properties": {"digest": {"minLength": 1}}}
+      ]
+    }
+  }
+}
