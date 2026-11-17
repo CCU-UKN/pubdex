@@ -1,18 +1,22 @@
 # Task 2b — Helm chart and cluster tests
 
-**Chart version 0.1.0, in this repository. Verified locally; public CI
-pending.**
+**Chart version 0.1.0, in this repository since 2026-11-17. The
+clean-clone suite and public CI passed.**
 
-On 2026-11-16 the complete suite passed all nine stages on this tree, apart
-from this record, `CHANGELOG.md` and `DB/TESTING_STRATEGY.md`, which were
-written after that run and passed stage 1 afterwards (*Local verification
-record*). Stage 9 ran the chart in both modes on Kubernetes 1.37, and
-evaluation mode's lifecycle on Kubernetes 1.35, the oldest supported
-release, as a user holding only the rights the guide lists. A run from a
-clean clone of the commit that holds this tree, and public CI of that
-commit, are recorded in a follow-up. No chart package is published, and no
-image changed: by default the chart runs the published 0.1.0 images of
-task 2a by digest. External acceptance of task 2b is not asserted.
+The result is commit
+[`a86d5e04a8a41795d476c5d1655bbee5b05150a7`](https://github.com/CCU-UKN/pubdex/commit/a86d5e04a8a41795d476c5d1655bbee5b05150a7),
+tree `a51189cfc6877d64731d8f801f31f1488d629e0a`. Its complete suite passed
+all nine stages from a clean clone locally on 2026-11-16 (*Local
+verification record*) and in
+[public CI](https://github.com/CCU-UKN/pubdex/actions/runs/43989083559) on
+2026-11-17, after a pull-request run on the same tree had passed
+(*Public-CI evidence*). Stage 9 ran the chart in both modes on Kubernetes
+1.37, and evaluation mode's lifecycle on Kubernetes 1.35, the oldest
+supported release, as a user holding only the rights the guide lists. This
+record was updated after those runs; the results belong to the commit named
+here. No chart package is published, and no image changed: by default the
+chart runs the published 0.1.0 images of task 2a by digest. External
+acceptance of task 2b is not asserted.
 
 Project page: [PubDex at NLnet](https://nlnet.nl/project/PubDex/). The
 earlier funded results are recorded in [`TASK_1A.md`](TASK_1A.md),
@@ -33,13 +37,14 @@ Seven states are kept apart, and each row below says which one it concerns:
 
 - **repository implementation** — the chart, the guide and the checks, in
   this tree;
-- **local suite** — the nine stages passed on this tree, uncommitted, on
-  2026-11-16, on one Linux x86_64 machine;
-- **clean-clone suite** — pending: a run from a clean clone of the commit
-  is recorded in a follow-up;
+- **local suite** — the nine stages passed on the commit's tree before it
+  was committed, on 2026-11-16, on one Linux x86_64 machine;
+- **clean-clone suite** — the nine stages passed from a clean clone of
+  commit `a86d5e0` on 2026-11-16, on the same machine;
 - **self-hosted Forgejo** — not run for this result;
-- **public CI** — pending: the `DB tests` workflow has not yet run the
-  nine-stage suite; its result is recorded in a follow-up;
+- **public CI** — the `DB tests` workflow passed all nine stages on
+  2026-11-17: in a pull-request run on GitHub's test merge, whose tree is
+  the commit's, and in the push run on `main` on commit `a86d5e0` itself;
 - **published chart or images** — no chart package is published (it is
   provided in the repository only); the images are the 0.1.0 images
   published for task 2a, unchanged;
@@ -124,8 +129,8 @@ verification suite passed in <n>s.` To install the chart on a cluster, follow
 | … upgrade | [`KUBERNETES.md`](KUBERNETES.md), *Upgrade* | stage 9, steps 8, 16–18 and 27 | from the published images to images built from the checkout, with changed values; data and schema kept; a routine upgrade runs no setup and needs no admin Secret; an upgrade that leaves the setup on without the admin Secret fails within seconds and leaves the deployed release as it was | verified locally |
 | … rollback | [`KUBERNETES.md`](KUBERNETES.md), *Rollback* | stage 9, steps 9, 19 and 28 | back to revision 1 and the published images, the publication still served; in external mode no setup hook runs | verified locally, in both modes |
 | … uninstall | [`KUBERNETES.md`](KUBERNETES.md), *Uninstall* | stage 9, steps 13, 20 and 29 | the release removed; what remains (the volume claim, the server's database) as the guide says | verified locally; an evaluation-mode reinstall onto a kept volume with other passwords ran once outside the suite (*The acceptance tests*) |
-| Public CI will lint and test the templates | stage 8, [`run_chart_checks.sh`](run_chart_checks.sh), [`charts/tests/`](charts/tests/); the workflows [`.github/workflows/db-tests.yml`](.github/workflows/db-tests.yml) and [`.forgejo/workflows/db-tests.yml`](.forgejo/workflows/db-tests.yml) | `./run_chart_checks.sh`; public CI of the published commit | `PASS: the Helm chart's offline checks passed.` | passed locally; **public CI pending** |
-| … and run an install-and-upgrade smoke test on an ephemeral cluster | stage 9, [`run_cluster_acceptance.sh`](run_cluster_acceptance.sh) | `./run_cluster_acceptance.sh`; public CI of the published commit | `PASS: the cluster acceptance test passed in <n>s.`, with the cleanup confirmed | passed locally; **public CI pending** |
+| Public CI will lint and test the templates | stage 8, [`run_chart_checks.sh`](run_chart_checks.sh), [`charts/tests/`](charts/tests/); the workflows [`.github/workflows/db-tests.yml`](.github/workflows/db-tests.yml) and [`.forgejo/workflows/db-tests.yml`](.forgejo/workflows/db-tests.yml) | `./run_chart_checks.sh`; public CI of the published commit | `PASS: the Helm chart's offline checks passed.` | **passed 2026-11-17** — in public CI on commit `a86d5e0`, after passing locally and from a clean clone of it (*Public-CI evidence*) |
+| … and run an install-and-upgrade smoke test on an ephemeral cluster | stage 9, [`run_cluster_acceptance.sh`](run_cluster_acceptance.sh) | `./run_cluster_acceptance.sh`; public CI of the published commit | `PASS: the cluster acceptance test passed in <n>s.`, with the cleanup confirmed | **passed 2026-11-17** — in public CI on commit `a86d5e0`, on kind clusters on GitHub's hosted runner, after passing locally and from a clean clone of it (*Public-CI evidence*) |
 | Helm tests (left to this task by task 1b) | [`templates/tests/test-readiness.yaml`](charts/pubdex/templates/tests/test-readiness.yaml) | stage 9, steps 7, 8, 15, 16, 18, 19, 26 and 27 (`helm test`) | `/readyz` and the first page of publications from a restricted pod | verified locally |
 
 ## The acceptance tests
@@ -232,10 +237,11 @@ CSV to standard output in the attached pod.
 
 | When, source | Command | Result |
 |---|---|---|
-| 2026-11-16, this tree, uncommitted | `./setup_venv.sh --python <python3.11> --psycopg python`, `./setup_cluster_tools.sh`, `./run_ci_suite.sh` | **All nine stages passed in 851 seconds.** Stage 1: 1673 offline tests passed, 125 expected skips, in 299 s. Stage 2: the tree, clean; no commit range, since the tree was uncommitted. Stages 3 and 4: 4 s and 5 s. Stage 5: 122 integration tests, then 27, in 22 s. Stages 6 and 7: 42 s and 49 s. Stage 8: 443 chart tests in 24 s. Stage 9: 29 steps in 402 s, 279 s on Kubernetes 1.37.0 and 123 s on 1.35.8. The images built in stages 6, 7 and 9 carry a revision marked `-dirty`, as an uncommitted tree gives. Every cleanup confirmed, and nothing of the run left in Docker |
-| 2026-11-16, afterwards, with this record, `CHANGELOG.md` and `DB/TESTING_STRATEGY.md` written | `./run_checks.sh`, `check_markdown_links.py`, `check_secrets_and_local_config.py` | stage 1 passed, with the same tests and skips; the link and secrets checks passed. No other file differs from the tree of the full run |
+| 2026-11-16, the commit's tree, uncommitted | `./setup_venv.sh --python <python3.11> --psycopg python`, `./setup_cluster_tools.sh`, `./run_ci_suite.sh` | **All nine stages passed in 851 seconds.** Stage 1: 1673 offline tests passed, 125 expected skips, in 299 s. Stage 2: the tree, clean; no commit range, since the tree was uncommitted. Stages 3 and 4: 4 s and 5 s. Stage 5: 122 integration tests, then 27, in 22 s. Stages 6 and 7: 42 s and 49 s. Stage 8: 443 chart tests in 24 s. Stage 9: 29 steps in 402 s, 279 s on Kubernetes 1.37.0 and 123 s on 1.35.8. The images built in stages 6, 7 and 9 carry a revision marked `-dirty`, as an uncommitted tree gives. Every cleanup confirmed, and nothing of the run left in Docker |
+| 2026-11-16, afterwards, with the commit's `TASK_2B.md`, `CHANGELOG.md` and `DB/TESTING_STRATEGY.md` written | `./run_checks.sh`, `check_markdown_links.py`, `check_secrets_and_local_config.py` | stage 1 passed, with the same tests and skips; the link and secrets checks passed. No other file differs from the tree of the full run |
+| 2026-11-16, a clean clone of commit `a86d5e0` | `./setup_venv.sh --python <python3.11> --psycopg python`, `./setup_cluster_tools.sh`, `./run_ci_suite.sh --base b6e9e0b467ea137fb98815ec8609dacb859ad75d --head a86d5e04a8a41795d476c5d1655bbee5b05150a7` | **All nine stages passed in 827 seconds.** Stage 1: 1673 offline tests passed, 125 expected skips, in 298 s. Stage 2: the range `b6e9e0b..a86d5e0`, one commit and 280 files, clean. Stages 3 and 4: 4 s each. Stage 5: 122 integration tests, then 27, in 23 s. Stages 6 and 7: 41 s and 50 s. Stage 8: 443 chart tests in 24 s. Stage 9: 29 steps in 378 s, 268 s on Kubernetes 1.37.0 and 110 s on 1.35.8. The images built in stages 6, 7 and 9 carry the commit's revision, without `-dirty`. Every cleanup confirmed, nothing of the run left in Docker, and the clone clean afterwards. A first attempt in the same clone had stopped before any stage: `setup_cluster_tools.sh` refused the download of kind, whose server presented a certificate for another host name, and installed nothing in its place; the setup was removed and run again |
 
-The host: Linux 6.8 on x86_64, Bash 5.2.21, CPython 3.11.17, pip 26.2.2,
+The host, for both runs: Linux 6.8 on x86_64, Bash 5.2.21, CPython 3.11.17, pip 26.2.2,
 psycopg 3.3.6 in its pure-Python implementation with libpq 16.15
 (`./setup_venv.sh --psycopg python`), Git 2.43.0, Docker Engine 29.9.3,
 Compose 5.7.1, OpenSSL 3.0.10. The clusters: kind 0.33.0 with the network
@@ -250,16 +256,37 @@ and
 pulled by digest in the node: on 1.37 before the install, on 1.35 by the
 kubelet during it.
 
-The GitHub workflow's psycopg C implementation and its Python 3.11.18 have
-not run this suite yet; public CI will. The workflows give the job 40
-minutes. From task 2a's public runs and this run, the nine stages are
-estimated at about 24 minutes on a hosted runner, and the limit is 1.5
-times that, rounded up to a multiple of 5.
+The workflows give the job 40 minutes. From task 2a's public runs and the
+run on the uncommitted tree, the nine stages were estimated at about 24
+minutes on a hosted runner, and the limit is 1.5 times that, rounded up to
+a multiple of 5. The two public runs below took 19 and 18 minutes.
+
+## Public-CI evidence
+
+The `DB tests` workflow,
+[`.github/workflows/db-tests.yml`](.github/workflows/db-tests.yml), on
+GitHub's hosted `ubuntu-24.04` runner. Times are UTC.
+
+| Run | Commit tested | Result |
+|---|---|---|
+| [pull-request run](https://github.com/CCU-UKN/pubdex/actions/runs/43983680287), 2026-11-16 23:57 to 2026-11-17 00:17, before `main` moved | `72ea3501bf57bd08b1af0ca3d7f58001ad55a963`, GitHub's test merge of `a86d5e0` into `b6e9e0b`, the tip of `main`; its tree is `a51189cf…`, the commit's | **All nine stages passed in 1082 seconds**, the job in 19 minutes. Stage 1: 1673 offline tests passed, 125 expected skips. Stage 2: from `b6e9e0b`, two commits, `a86d5e0` and the test merge, and 280 files, clean. Stage 5: 122 integration tests, then 27. Stage 8: 443 chart tests. Stage 9: 29 steps in 404 s. The images built carry the test merge's revision |
+| [push run on `main`](https://github.com/CCU-UKN/pubdex/actions/runs/43989083559), 2026-11-17 00:37 to 00:55, after `main` was moved to the commit unchanged | `a86d5e04a8a41795d476c5d1655bbee5b05150a7` itself | **All nine stages passed in 1016 seconds**, the job in 18 minutes against its limit of 40. Stage 1: 1673 offline tests passed, 125 expected skips, in 260 s. Stage 2: the range `b6e9e0b..a86d5e0`, one commit and 280 files, clean. Stages 3 and 4: 13 s and 4 s. Stage 5: 122 integration tests, then 27, in 20 s. Stages 6 and 7: 222 s and 56 s. Stage 8: 443 chart tests in 18 s. Stage 9: 29 steps in 419 s, 298 s on Kubernetes 1.37.0 and 121 s on 1.35.8. The images built in stages 6, 7 and 9 carry the commit's revision. Every cleanup confirmed |
+
+Both runs: runner image `ubuntu-24.04` version 20261111.370.1 (Ubuntu
+24.04.5), CPython 3.11.18, pip 26.2.2, psycopg 3.3.6 in its C
+implementation with libpq 18.6, Docker Engine 28.0.4 and Compose 2.38.2;
+helm 4.3.1, kubectl 1.36.6 and kind 0.33.0 installed by
+`setup_cluster_tools.sh`, with the node images named above. The installers
+reported that the runner permits no network namespace: pip ran with
+`--no-index`, without a network sandbox, as in task 2a's public run.
+
+These runs identify commit `a86d5e0`. The later documentation commit that
+records them is not a run of that commit and does not change its results.
 
 ## Verification limits
 
 - **Two cluster configurations.** Kubernetes 1.37.0 and 1.35.8, on one
-  machine. Every cluster run used kind clusters of one node, with the
+  local machine and on GitHub's hosted runner. Every cluster run used kind clusters of one node, with the
   network plugin kindnet and kind's default StorageClass. No other
   Kubernetes distribution, network plugin or storage provisioner has run
   the chart: a volume from another StorageClass with the pods' `fsGroup`,
@@ -292,11 +319,11 @@ times that, rounded up to a multiple of 5.
   backup and restore on Kubernetes; a PersistentVolume with `Retain`;
   `--reuse-values` after a routine upgrade, which the guide warns against;
   and `sslmode` other than `verify-full` in a cluster.
-- **Hosted runners.** The nine stages have not run on a hosted runner, nor
-  with the GitHub workflow's Python 3.11.18 and psycopg's C
-  implementation. The job limit of 40 minutes rests on an estimate.
-- **No clean-clone run of the commit yet, no self-hosted Forgejo run, and
-  public CI pending**, as stated above.
+- **Hosted runners.** The nine stages ran on one hosted runner platform,
+  GitHub's `ubuntu-24.04` with Docker Engine 28.0.4, twice, in 19 and 18
+  minutes against the job's limit of 40. No other hosted runner has run
+  them.
+- **No self-hosted Forgejo run** of this result, as stated above.
 
 ## Not part of this result
 

@@ -1683,7 +1683,9 @@ What has been demonstrated, and what has not:
   1b in [`TASK_1B.md`](../TASK_1B.md), all seven in [`TASK_2A.md`](../TASK_2A.md),
   and all nine, with Python 3.11.17 and the Helm chart's stages on kind
   clusters of Kubernetes 1.37.0 and 1.35.8, on 2026-11-16, on the tree of
-  [`TASK_2B.md`](../TASK_2B.md) before it was committed;
+  task-2b commit `a86d5e0` before it was committed and from a clean clone
+  of that commit ([`TASK_2B.md`](../TASK_2B.md), *Local verification
+  record*);
   and there, the three script lines the GitLab example below had then —
   without its installation of pip — run by hand with the variables of a
   branch's first push, on the five-stage suite of task 1b. On Forgejo,
@@ -1699,10 +1701,13 @@ What has been demonstrated, and what has not:
   ([`TASK_1B.md`](../TASK_1B.md), *Public-CI evidence*). All seven stages,
   including both Compose stages, passed on the same hosted runner platform
   with Python 3.11.18 for task-2a release source `57a72dc` on 2026-11-02
-  ([`TASK_2A.md`](../TASK_2A.md), *Public-CI evidence*).
-- **Not demonstrated:** the nine stages in public CI or on Forgejo — both
-  workflows have run seven at most — or from a clean clone of the commit
-  that holds task 2b; a GitLab pipeline — the GitLab
+  ([`TASK_2A.md`](../TASK_2A.md), *Public-CI evidence*). All nine,
+  including the Helm chart's stages on kind clusters, passed there with
+  Python 3.11.18 and psycopg's C implementation for task-2b commit
+  `a86d5e0` on 2026-11-17, in a pull-request run and in the push run on
+  `main` ([`TASK_2B.md`](../TASK_2B.md), *Public-CI evidence*).
+- **Not demonstrated:** the nine stages on Forgejo — its workflow has run
+  seven at most; a GitLab pipeline — the GitLab
   example has not run as one; a run on a Forgejo instance anyone can
   inspect — the Forgejo runs were on a private one; any architecture other
   than x86_64; macOS with Docker Desktop, and Windows through WSL 2.

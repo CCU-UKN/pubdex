@@ -9,7 +9,7 @@ repository, and prototype functionality included here is not claimed as funded
 work; the entries below describe the funded results built on top of it.
 Background: [Origins and funding](README.md).
 
-## Unreleased — Helm chart, chart version 0.1.0
+## Helm chart, chart version 0.1.0 — public CI passed 2026-11-17
 
 Task 2b: a Helm chart for both a self-contained evaluation deployment and an
 installation with external PostgreSQL, with documented values, Secret and
@@ -20,8 +20,11 @@ of the complete suite. The chart is version 0.1.0 and its `appVersion` is
 0.1.0: by default it runs the published 0.1.0 images by digest. Neither
 image changed, so the application stays at version 0.1.0
 ([`VERSION`](VERSION)). The chart is provided in this repository only; no
-chart package is published. External acceptance of the task is not
-asserted.
+chart package is published. The result is commit
+`a86d5e04a8a41795d476c5d1655bbee5b05150a7`.
+[Public CI](https://github.com/CCU-UKN/pubdex/actions/runs/43989083559)
+passed on that commit on 2026-11-17. External acceptance of the task is
+not asserted.
 
 ### The chart
 
@@ -166,14 +169,27 @@ initialised with, and the guide's troubleshooting gives the two ways out.
 
 ### Verification
 
-On 2026-11-16 all nine stages passed locally on this tree in 851 seconds,
-with Kubernetes 1.37.0 and 1.35.8 on kind for stage 9, apart from this
-entry, [`TASK_2B.md`](TASK_2B.md) and
+Commit `a86d5e04a8a41795d476c5d1655bbee5b05150a7`, tree
+`a51189cfc6877d64731d8f801f31f1488d629e0a`, passed all nine stages from a
+clean clone locally on 2026-11-16 in 827 seconds, and in public CI on
+2026-11-17: in a pull-request run on GitHub's test merge of the commit into
+the previous `main`, whose tree is the commit's, in 1082 seconds, and in the
+push run on `main` on the commit itself in 1016 seconds. Each run passed
+1673 offline tests with 125 expected skips, 122 integration tests and then
+27, and 443 chart tests, and stage 9 on kind clusters of Kubernetes 1.37.0
+and 1.35.8; every image built carried the revision of the commit tested,
+without `-dirty`. The hosted runner used Python 3.11.18 and psycopg's C
+implementation with libpq 18.6, Docker Engine 28.0.4 and Compose 2.38.2;
+its installers reported no network namespace, using `--no-index` without a
+network sandbox.
+
+Before it was committed, the tree passed all nine stages locally on
+2026-11-16 in 851 seconds, apart from the commit's versions of this entry,
+[`TASK_2B.md`](TASK_2B.md) and
 [`DB/TESTING_STRATEGY.md`](DB/TESTING_STRATEGY.md), which were written after
-that run and passed stage 1 afterwards. A run from a clean clone of the
-commit that publishes this entry, and public CI of it, are recorded in a
-follow-up. [`TASK_2B.md`](TASK_2B.md) is the requirement-by-requirement
-record.
+that run and passed stage 1 afterwards. These runs precede this record; they
+do not claim a pipeline on the later documentation commit.
+[`TASK_2B.md`](TASK_2B.md) is the requirement-by-requirement record.
 
 ## Container image and Compose deployment — version 0.1.0 published 2026-11-03
 
