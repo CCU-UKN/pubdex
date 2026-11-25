@@ -15,7 +15,11 @@ checked for its digest and revision; that the run starts a compose.yaml alone
 in a project directory of its own -- this checkout's, or with --release the
 one the image carries, whatever the checkout holds -- and refuses an image
 that carries none, a build that carries another one and a release whose file
-names another version; that every Compose call is bound to the run's
+names another version or runs no schema upgrade; that it refuses an image
+without schema changes and a build that carries other ones than the
+checkout's DB/schema/; that the rendered configuration gives the superuser's
+password file to PostgreSQL and the schema upgrade alone and starts nothing
+that uses the database before the schema upgrade; that every Compose call is bound to the run's
 project, project directory, Compose files and environment file and receives
 nothing of a polluted caller's environment; that no password reaches a
 command line or the output unmasked; and that a failure, a signal, a second
@@ -25,6 +29,7 @@ path itself runs against real Docker, as stage 6 of run_ci_suite.sh.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import shutil
@@ -47,6 +52,11 @@ RUN_LABEL = "pubdex.stack-acceptance.run"
 DEFAULT_POSTGRES = "ghcr.io/ccu-ukn/pubdex-postgres:0.1.0"
 RELEASE_REF_FOR_USAGE = "registry.example.org/team/pubdex:0.1.0@sha256:" + "a" * 64
 PROJECT_RE = r"pubdex-acceptance-\d{14}-\d+-[0-9a-f]{8}"
+#: The schema changes of this checkout as the image of a build lists them: number|name|SHA-256.
+SCHEMA_FILES = sorted((ROOT / "DB" / "schema").glob("*.sql"))
+SCHEMA_LISTING = "".join(f"{int(path.name[:4])}|{path.stem}|{hashlib.sha256(path.read_bytes()).hexdigest()}\n"
+                         for path in SCHEMA_FILES)
+SCHEMA_CHANGES = f"{len(SCHEMA_FILES)} schema change" + ("" if len(SCHEMA_FILES) == 1 else "s")
 # What isolated() hands a command, plus what a shell adds on its own.
 ISOLATED_ENVIRONMENT = {"PATH", "HOME", "LC_ALL", "PWD", "SHLVL", "_"}
 
@@ -122,6 +132,11 @@ case "$1" in
           || { echo "stub: unexpected docker run $*" >&2; exit 2; }
         program="$(cat)"
         case "$program" in
+          *hashlib*)
+            # The schema changes the image carries, number|name|SHA-256.
+            printf '%s\n' "$program" > "$state/image-schema-program"
+            has image-without-schema && exit 0
+            cat "$state/image_schema"; exit 0 ;;
           *importlib.metadata*)
             printf '%s\n' "$program" > "$state/image-packages-program"
             # An image the test laid out as a file system of its own, with a
@@ -182,13 +197,26 @@ case "$1" in
         name="$project"; has config-redirected && name=db
         leak=""; has config-leak && leak="$(cat "$secrets/postgres_password")"
         labels="{\"$RUN_LABEL\": \"$run\"}"
+        secret() { local s="" n; for n in "$@"; do s="$s${s:+, }{\"source\": \"$n\"}"; done; printf '[%s]' "$s"; }
+        api_secrets="$(secret app_readonly_password)"
+        has config-extra-credential && api_secrets="$(secret app_readonly_password postgres_password)"
+        after='{"postgres": {"condition": "service_healthy"}, "schema-upgrade": {"condition": "service_completed_successfully"}}'
+        api_after="$after"
+        has config-no-upgrade-dependency && api_after='{"postgres": {"condition": "service_healthy"}}'
         cat <<JSON
 {"name": "$name", "services": {
  "bootstrap": {"image": "$image", "labels": $labels, "network_mode": "none"},
- "postgres": {"image": "$postgres_image", "labels": $labels, "networks": {"default": null}, "environment": {"X": "$leak"}},
- "api": {"image": "$image", "labels": $labels, "networks": {"default": null, "published": null}},
- "ingest": {"image": "$image", "labels": $labels, "networks": {"default": null}},
- "demo": {"image": "$image", "labels": $labels, "networks": {"default": null}}},
+ "postgres": {"image": "$postgres_image", "labels": $labels, "networks": {"default": null}, "environment": {"X": "$leak"},
+              "secrets": $(secret postgres_password app_readonly_password app_writer_password)},
+ "schema-upgrade": {"image": "$image", "labels": $labels, "networks": {"default": null}, "read_only": true,
+                    "cap_drop": ["ALL"], "security_opt": ["no-new-privileges:true"], "secrets": $(secret postgres_password),
+                    "depends_on": {"postgres": {"condition": "service_healthy"}}},
+ "api": {"image": "$image", "labels": $labels, "networks": {"default": null, "published": null},
+         "secrets": $api_secrets, "depends_on": $api_after},
+ "ingest": {"image": "$image", "labels": $labels, "networks": {"default": null}, "secrets": $(secret app_writer_password),
+            "depends_on": $after},
+ "demo": {"image": "$image", "labels": $labels, "networks": {"default": null}, "secrets": $(secret app_writer_password),
+          "depends_on": $after}},
  "networks": {"default": {"internal": true}, "published": {}}}
 JSON
         exit 0 ;;
@@ -306,10 +334,20 @@ class Fake:
                          "DB/tests/compose.acceptance.yaml"):
             (self.root / relative).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(ROOT / relative, self.root / relative)
+        # The image-label and reference cases below use a fixed synthetic
+        # release, independently of the checkout's current version.
+        (self.root / "VERSION").write_text("0.1.0\n", encoding="utf-8")
+        (self.root / "compose.yaml").write_text(
+            (ROOT / "compose.yaml").read_text(encoding="utf-8").replace(
+                (ROOT / "VERSION").read_text(encoding="utf-8").strip(), "0.1.0"), encoding="utf-8")
         self.state = tmp_path / "state"
         (self.state / "images").mkdir(parents=True)
-        # The compose.yaml every image of the stub carries: this checkout's.
-        shutil.copy2(ROOT / "compose.yaml", self.state / "image_compose")
+        # The compose.yaml every image of the stub carries: this checkout's,
+        # and its schema changes.
+        shutil.copy2(self.root / "compose.yaml", self.state / "image_compose")
+        shutil.copytree(ROOT / "DB" / "schema", self.root / "DB" / "schema",
+                        ignore=lambda directory, names: [name for name in names if not name.endswith(".sql")])
+        (self.state / "image_schema").write_text(SCHEMA_LISTING, encoding="utf-8")
         self.events = tmp_path / "events.log"
         self.workdirs = tmp_path / "tmp"
         self.workdirs.mkdir()
@@ -751,7 +789,7 @@ def test_a_development_run_starts_this_checkouts_compose_file_and_says_when_the_
     proc = fake.run("--image", "pubdex:given", "--expect-revision", SHA)
     assert "note: the run starts this checkout's compose.yaml, which differs from the one the image carries" in proc.stdout
     assert "(--release starts the image's)" in proc.stdout
-    assert fake.started_compose() == (ROOT / "compose.yaml").read_text(encoding="utf-8")
+    assert fake.started_compose() == (fake.root / "compose.yaml").read_text(encoding="utf-8")
     assert fake.calls("git") == [], "only a build is checked against the checkout's commit"
 
 
@@ -769,6 +807,44 @@ def test_an_image_that_carries_no_compose_file_is_refused_before_the_start(tmp_p
     assert run[1:8] == ["--rm", "--network", "none", "--label", run[5], "--entrypoint", "cat"]
     assert run[5].startswith("pubdex.stack-acceptance.run=") and run[-2:] == ["sha256:given", "/opt/pubdex/compose.yaml"]
     fake.assert_nothing_left()
+
+
+def test_an_image_without_schema_changes_is_refused_before_the_start(tmp_path: Path) -> None:
+    # Such as 0.1.0's: compose.yaml would run a schema upgrade the image lacks.
+    fake = Fake(tmp_path, "image-without-schema")
+    fake.add_image("pubdex:candidate")
+    proc = fake.run("--image", "pubdex:candidate")
+    assert proc.returncode == 1
+    assert ("the image carries no schema change in /opt/pubdex/schema: it predates the schema upgrade that "
+            "compose.yaml runs") in proc.stderr
+    assert fake.compose_calls() == []
+    fake.assert_nothing_left()
+
+
+def test_the_images_schema_changes_are_listed_in_a_container_of_the_run_without_network(tmp_path: Path) -> None:
+    fake = Fake(tmp_path, "up-fails")
+    fake.add_image("pubdex:candidate")
+    proc = fake.run("--image", "pubdex:candidate")
+    assert f"ok  the image carries {SCHEMA_CHANGES} in /opt/pubdex/schema, the last {SCHEMA_FILES[-1].stem}\n" in proc.stdout
+    assert ", exactly this checkout's DB/schema/" not in proc.stdout, "a given image is not compared with the checkout"
+    assert '"/opt/pubdex/schema"' in (fake.state / "image-schema-program").read_text(encoding="utf-8")
+    runs = [call for call in fake.calls() if call[:1] == ["run"] and call[-1] == "-"]
+    assert len(runs) == 3, "the files, the packages and the schema changes, each in a container of its own"
+    for call in runs:
+        assert call[call.index("--network") + 1] == "none" and call[call.index("--user") + 1] == "10001:10001"
+        assert call[call.index("--label") + 1].startswith(f"{RUN_LABEL}=") and "--rm" in call
+    fake.assert_nothing_left()
+
+
+def test_a_build_that_carries_other_schema_changes_than_this_checkouts_is_refused(tmp_path: Path) -> None:
+    fake = Fake(tmp_path)
+    fake.setting("image_schema", SCHEMA_LISTING.replace(SCHEMA_FILES[-1].stem, SCHEMA_FILES[-1].stem + "_edited"))
+    proc = fake.run()
+    assert proc.returncode == 1
+    assert "the image built from this checkout does not carry exactly the schema changes of its DB/schema/" in proc.stderr
+    assert fake.compose_calls() == []
+    fake.assert_nothing_left()
+    assert fake.images() == []
 
 
 def test_the_images_files_are_checked_as_its_user_finds_them(tmp_path: Path) -> None:
@@ -822,7 +898,7 @@ def test_the_images_packages_are_its_runtime_lock_without_pip(tmp_path: Path) ->
             "image packaging 26.3, wheel 0.46.3; its Python cannot import pip, and no file in it is named as pip, "
             "its scripts, its distribution or a wheel") in proc.stdout
     checks = [call for call in fake.calls() if call[:1] == ["run"] and "python" in call]
-    assert len(checks) == 2, "the files, then the packages"
+    assert len(checks) == 3, "the files, then the packages, then the schema changes"
     assert checks[1][1:5] == ["--rm", "-i", "--network", "none"]
     assert checks[1][checks[1].index("--user") + 1] == "10001:10001"
     assert checks[1][-4:] == ["python", "sha256:given", "-I", "-"], "in the container the program checks its root"
@@ -903,7 +979,8 @@ RELEASE = ["--expect-version", "0.1.0", "--expect-revision", SHA]
 #: A release pulled by digest: both images of it.
 RELEASE_PULL = ["--pull", "--postgres-image", RELEASE_POSTGRES_REF]
 RELEASE_COMPOSE = (ROOT / "compose.yaml").read_text(encoding="utf-8").replace(
-    "${PEOPLE_PUBS_IMAGE:-ghcr.io/ccu-ukn/pubdex:" + (ROOT / "VERSION").read_text(encoding="utf-8").strip() + "}",
+    (ROOT / "VERSION").read_text(encoding="utf-8").strip(), "0.1.0").replace(
+    "${PEOPLE_PUBS_IMAGE:-ghcr.io/ccu-ukn/pubdex:0.1.0}",
     "${PEOPLE_PUBS_IMAGE:-registry.example.org/team/pubdex:0.1.0}")
 
 
@@ -929,6 +1006,7 @@ def test_a_release_is_the_image_labelled_with_it_and_the_compose_file_it_carries
     assert ("ok  the image carries the requested digest" in out) == ("@sha256:" in reference)
     assert ("ok  the run starts the compose.yaml the image carries, which names the release's image "
             "registry.example.org/team/pubdex:0.1.0") in out
+    assert f"ok  the image carries {SCHEMA_CHANGES} in /opt/pubdex/schema, the last {SCHEMA_FILES[-1].stem}\n" in out
     assert f"ok  the PostgreSQL image's revision label is {SHA}" in out
     assert "ok  the compose.yaml the image carries names the release's PostgreSQL image " + DEFAULT_POSTGRES in out
     assert ("ok  the PostgreSQL image carries the requested digest" in out) == bool(extra)
@@ -948,7 +1026,11 @@ def test_a_release_is_the_image_labelled_with_it_and_the_compose_file_it_carries
      "the compose.yaml the image carries names the image registry.example.org/team/pubdex:0.0.9, not one of release 0.1.0"),
     (RELEASE_COMPOSE.replace("${PEOPLE_PUBS_IMAGE:-registry.example.org/team/pubdex:0.1.0}", "pubdex:local"),
      "the compose.yaml the image carries names no default application image"),
-], ids=["other-version", "no-default"])
+    # As 0.1.0's: nothing brings the database to the schema of the image.
+    (re.sub(r"\n  # Brings the database to the schema.*?\n\n", "\n\n", RELEASE_COMPOSE, flags=re.S),
+     "the compose.yaml the image carries has no schema-upgrade service, which brings the database to the schema of "
+     "the image"),
+], ids=["other-version", "no-default", "no-schema-upgrade"])
 def test_a_release_whose_compose_file_names_another_image_stops_before_the_start(tmp_path: Path, compose: str,
                                                                                 message: str) -> None:
     fake = Fake(tmp_path)
@@ -1028,6 +1110,8 @@ def test_a_build_is_this_checkout_under_a_tag_of_the_run_which_goes_with_it(tmp_
     assert f"ok  the image's revision label is {revision}" in proc.stdout
     assert f"ok  the PostgreSQL image's labels are this checkout's: version 0.1.0, revision {revision}" in proc.stdout
     assert "ok  the run starts this checkout's compose.yaml, which the image carries unchanged" in proc.stdout
+    assert (f"ok  the image carries {SCHEMA_CHANGES} in /opt/pubdex/schema, the last {SCHEMA_FILES[-1].stem}, "
+            "exactly this checkout's DB/schema/") in proc.stdout
     assert f"PEOPLE_PUBS_POSTGRES_IMAGE={build[3]}\n" in (fake.state / "last.env").read_text()
     assert ["image", "rm", build[1]] in fake.calls(), "the cleanup removes the run's tags"
     assert ["image", "rm", build[3]] in fake.calls()
@@ -1117,7 +1201,7 @@ def test_every_compose_call_is_bound_to_the_run_whatever_the_caller_exports(tmp_
                              "--env-file", str(work / "stack.env")], call
     seen = fake.state / "directory-seen"
     assert sorted(path.name for path in seen.iterdir()) == ["compose.yaml"], "compose.yaml and nothing else"
-    assert (seen / "compose.yaml").read_bytes() == (ROOT / "compose.yaml").read_bytes()
+    assert (seen / "compose.yaml").read_bytes() == (fake.root / "compose.yaml").read_bytes()
     environments = [dict(item.split("=", 1) for item in call) for call in fake.calls("compose-env")]
     assert environments
     for environment in environments:
@@ -1157,7 +1241,11 @@ def test_no_password_reaches_a_command_line_or_the_output_unmasked(tmp_path: Pat
 @pytest.mark.parametrize(
     "mode, message",
     [("config-leak", "a password occurs in the rendered configuration"),
-     ("config-redirected", "the rendered configuration is not the run's own")],
+     ("config-redirected", "the rendered configuration is not the run's own"),
+     # The read service holding the superuser's password file, or starting
+     # before the schema upgrade has succeeded.
+     ("config-extra-credential", "the rendered configuration is not the run's own"),
+     ("config-no-upgrade-dependency", "the rendered configuration is not the run's own")],
 )
 def test_a_rendered_configuration_that_is_not_safe_stops_the_run_before_the_start(tmp_path: Path, mode: str,
                                                                                     message: str) -> None:
@@ -1172,7 +1260,7 @@ def test_a_failure_after_the_start_removes_the_project_and_shows_masked_diagnost
     fake = Fake(tmp_path, "leaky-logs")
     proc = fake.run()
     assert proc.returncode == 1
-    assert "did not bootstrap the schema the image carries and provision the role passwords" in proc.stderr
+    assert "the read service is not published on a single loopback port" in proc.stderr
     assert "the superuser password is <password>" in proc.stderr
     assert re.search(r"the superuser password is [0-9a-f]{64}", proc.stdout + proc.stderr) is None
     [down] = [call for call in fake.compose_calls() if "down" in call]

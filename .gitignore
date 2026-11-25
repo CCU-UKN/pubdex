@@ -42,4 +42,7 @@ DB/*.log
 
 # The pinned helm, kubectl and kind (setup_cluster_tools.sh)
 /.tools/
+
+# The artifact sets release.sh builds
+/dist/
 .vscode/settings.json

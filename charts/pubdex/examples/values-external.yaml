@@ -3,18 +3,26 @@
 #
 # Before the install, on the server: a database people_db owned by the role
 # people_db_owner, which has CREATEROLE (values.yaml, externalDatabase).
-# In the release's namespace:
+# In the release's namespace, with create_secrets.sh from the PubDex source
+# of this chart's version or from the application image (values.yaml,
+# secrets):
 #
-#   ./create_secrets.sh
+#   bash create_secrets.sh
 #   kubectl create secret generic pubdex-credentials \
 #     --from-file=secrets/app_readonly_password \
 #     --from-file=secrets/app_writer_password
 #   kubectl create secret generic pubdex-db-admin --from-file=password=<file with the owner's password>
 #   kubectl create configmap pubdex-db-ca --from-file=ca.crt=<the server's CA certificate>
 #
-# Then, from the repository's root:
+# Then, from the root of the PubDex source of this chart's version:
 #
-#   helm install pubdex charts/pubdex --values charts/pubdex/examples/values-external.yaml
+# Prepare values-images.yaml with image.digest and postgresImage.digest
+# from the selected PubDex release record. A tag can be moved; the digests
+# identify the exact images. See KUBERNETES.md, The short path.
+# These substitutions are not run by the suite; stage 8 renders this example,
+# and stage 9 admits its objects with the run's own image references.
+#   helm install pubdex charts/pubdex --values charts/pubdex/examples/values-external.yaml \
+#     --values values-images.yaml
 #
 # and delete the Secret pubdex-db-admin until the next upgrade.
 mode: external

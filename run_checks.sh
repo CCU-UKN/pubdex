@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 # The default offline check suite, in one command.
 #
-# Covers: Python compilation, Markdown link and path consistency, the offline
-# unit and fixture tests, and the transform-version guard when a commit range
-# or the staged index is supplied. It needs no database and no network -- the
+# Covers: Python compilation, Markdown link and path consistency, the release
+# notes of VERSION in CHANGELOG.md against the tree and the release record
+# (DB/check_release_notes.py), the version guard, which refuses a tree that
+# carries a published version but ships other files (DB/check_version_guard.py),
+# the offline unit and fixture tests, and the transform-version guard when a
+# commit range or the staged index is supplied. It needs no database and no
+# network -- the
 # tests' network guard refuses connections from the tests and the Python
 # processes they start -- and the tests run in a cleared environment
 # (DB/run_tests.sh): no DSN, PG* setting or PYTEST_ADDOPTS value the caller
@@ -25,7 +29,7 @@
 # (./setup_cluster_tools.sh):
 #
 #   check_secrets_and_local_config.py  committed secrets and local configuration
-#   DB/run_migration_smoke.sh          schema bootstrap from an empty database
+#   DB/run_migration_smoke.sh          the baseline from an empty database and the schema upgrade
 #   DB/run_task_1a_demo.sh             the clean-clone acceptance path, offline
 #   DB/run_disposable_integration.sh   the integration suite on a disposable PostgreSQL
 #   run_stack_acceptance.sh            the Compose deployment, started and checked end to end
@@ -103,9 +107,9 @@ if [ ! -x "$PYTHON" ]; then
   exit 1
 fi
 
-steps=3
+steps=5
 if [ -n "$mode" ]; then
-  steps=4
+  steps=6
 fi
 
 echo "[1/$steps] Compiling people_pubs and its tests..."
@@ -114,16 +118,22 @@ PYTHONDONTWRITEBYTECODE=1 "$PYTHON" -m compileall -q DB/people_pubs DB/tests
 echo "[2/$steps] Checking Markdown links and paths..."
 "$PYTHON" check_markdown_links.py
 
-echo "[3/$steps] Running the offline test suite..."
+echo "[3/$steps] Checking the release notes of VERSION against the tree..."
+PYTHONDONTWRITEBYTECODE=1 PEOPLE_PUBS_SKIP_DOTENV=1 "$PYTHON" DB/check_release_notes.py
+
+echo "[4/$steps] Version guard: a published version ships what it shipped..."
+PYTHONDONTWRITEBYTECODE=1 "$PYTHON" DB/check_version_guard.py
+
+echo "[5/$steps] Running the offline test suite..."
 DB/run_tests.sh
 
 case "$mode" in
   staged)
-    echo "[4/$steps] Transform-version guard (staged index)..."
+    echo "[6/$steps] Transform-version guard (staged index)..."
     "$PYTHON" DB/check_transform_version.py --staged
     ;;
   range)
-    echo "[4/$steps] Transform-version guard ($base..$head_ref)..."
+    echo "[6/$steps] Transform-version guard ($base..$head_ref)..."
     # A first push of a root commit reports an empty or all-zero base SHA:
     # there is no range to compare, which is expected, not a failure.
     if [ -z "$base" ] || [ -z "${base//0/}" ]; then

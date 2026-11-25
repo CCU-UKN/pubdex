@@ -188,7 +188,7 @@ def test_no_problem_prints_nothing() -> None:
 
 # Where the requirement is stated for readers. The changelog is left out: it
 # records what each release needed at the time.
-DOCUMENTS = ["README.md", "DEPLOYMENT.md", "TASK_2A.md", "DB/TESTING_STRATEGY.md", "run_ci_suite.sh",
+DOCUMENTS = ["README.md", "DEPLOYMENT.md", "VERSIONING.md", "TASK_2A.md", "DB/TESTING_STRATEGY.md", "run_ci_suite.sh",
              "run_stack_acceptance.sh", "run_operator_acceptance.sh", "build_image.sh", "Dockerfile"]
 STATED = re.compile(r"Compose(?: plugin)?,? (?:version )?(\d+\.\d+(?:\.\d+)?) or later|"
                     r"Compose(?: plugin)?[^.|]{0,40}?older than (\d+\.\d+(?:\.\d+)?)")

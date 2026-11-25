@@ -9,6 +9,125 @@ repository, and prototype functionality included here is not claimed as funded
 work; the entries below describe the funded results built on top of it.
 Background: [Origins and funding](README.md).
 
+## PubDex 0.2.0 — unpublished candidate
+
+### Schema changes
+
+- `0001`, backward compatible: creates `pubdex.schema_changes`, the record
+  of the schema changes a database has had. It only adds; PubDex 0.1.0
+  reads none of it.
+
+### Ingestion changes
+
+The transform version is 1.5.4 (PubDex 0.1.0: 1.5.3). Every ingestion
+command checks the database's recorded schema version before it writes
+anything, and stops with exit status 1, naming the schema upgrade command,
+when this PubDex release does not support that schema. Rows are written as
+before, apart from their transform-version stamp: a re-ingestion records
+`people_pubs/1.5.4` in the provenance of each source it writes.
+
+### Upgrade and rollback
+
+An upgrade to 0.2.0 is supported from 0.1.0, which is both the floor and
+the preceding PubDex release. It adds one step, the schema upgrade,
+`python -m people_pubs.schema upgrade`, which applies schema change `0001`:
+on Compose the one-shot service `schema-upgrade` runs it before the read
+service, ingestion and the demonstration start; the Helm chart runs it as
+a Job in evaluation mode, and in external mode as a hook after the setup
+Job, which needs the admin Secret for that upgrade. Until it has run, the
+read service of 0.2.0 reports not ready with `schema_upgrade_required` and
+ingestion commands stop.
+
+Every schema change of 0.2.0 is backward compatible, so the rollback to
+0.1.0 is an image rollback: 0.1.0's images, and on Kubernetes its chart,
+run on the upgraded schema, which keeps schema change `0001`. A rollback is
+supported only to the PubDex release the upgrade started from.
+
+Existing chart values, Compose settings and secret files remain usable. The new
+`schemaUpgrade.resources` chart value configures the schema Job. A routine
+external-mode upgrade changes neither passwords nor schema, turns the
+setup off and needs no admin Secret; an upgrade with schema changes needs
+it for that run.
+
+The chart's version, its `appVersion`, both Compose image defaults and
+`VERSION` are all 0.2.0. Chart defaults now select the images by version
+tag, with no digest: operators set both digests from the release record,
+since a tag can be moved. A checkout between PubDex releases builds its
+own images until its version is published. The guides describe the
+transition from a locally built short-path deployment through its matching
+published PubDex release, backups with verification counts, the external
+values packaged with each chart, and the upgrade and image-rollback steps.
+PubDex provides no rollback by restore on Kubernetes: the operator restores
+the pre-upgrade backup before starting the older images, using the external
+server's own means in external mode.
+
+### Release automation and artifacts
+
+- [`release.sh`](release.sh) builds and verifies a source archive, both
+  `linux/amd64` images, a packaged Helm chart, a checksum file, an SPDX 2.3
+  JSON SBOM per image and a provenance record. Syft 1.57.2 is pinned by
+  digest and runs without network. Provenance format 2 records each image's
+  config digest independently of its store-dependent image id; format 1
+  remains readable. [`DB/verify_release.py`](DB/verify_release.py) checks
+  the complete five-file download set and saved-image config bytes.
+- A PubDex-release build requires a clean checkout at its annotated tag
+  and builds both images without Docker's build cache, so their Debian
+  packages come from Debian's archive at build time. Test releases keep the
+  cache. The source archive and chart package are byte-identical on a
+  rebuild with the same GNU tar, gzip and pinned helm; stage 10 compares
+  two builds on one machine. The images are rebuildable from their recorded
+  inputs, with different creation labels and image identities.
+- Publication is a separate maintainer command. `release.sh publish`
+  resumes an interrupted publication only when an image the registry holds
+  has a digest the verified local image records for that repository. Any
+  other image under the version stops it before any push. The completion
+  record is written only after both images are published. Publication and
+  recovery are covered with stubs; CI publishes nothing.
+- [`releases/`](releases/README.md) defines the authoritative committed
+  release record, with the checksum file, provenance and image digests;
+  the forge's download page is a copy. The chart package is a file and is
+  not published to a chart registry. Nothing is signed. PubDex 0.1.0
+  predates this automation and has no retroactive archive, SBOM or checksum
+  file.
+
+### Versions, guides and checks
+
+[`VERSIONING.md`](VERSIONING.md) defines one version for all artifacts,
+the supported upgrade floor and rollback rules, and the Kubernetes window.
+Until 1.0.0 a patch release changes neither schema nor ingestion and
+preserves chart values, Compose settings, environment variables, secret
+files and defaults existing configuration relies on. A minor release names
+incompatible configuration changes under *Upgrade and rollback*.
+[`RELEASING.md`](RELEASING.md) gives the maintainer's procedure and the
+rules for schema changes and release notes. [`DEPLOYMENT.md`](DEPLOYMENT.md)
+and [`KUBERNETES.md`](KUBERNETES.md) give the operator's upgrade steps.
+Their command mappings are checked by stage 1.
+
+Stage 1 checks the three fixed release-note headings against the schema
+changes, transform version, preceding PubDex release and floor. It also
+refuses shipped content that differs from a published version while still
+carrying that version. The notes check does not verify configuration-change
+completeness. Both CI adapters run the same four setup-and-suite commands
+under a 60-minute limit, without a publication step.
+
+### Local verification
+
+On 2026-11-24 all eleven stages passed locally in **1,467 seconds**:
+2,376 offline tests with 138 expected skips, 135 integration tests and two
+28-test reruns, 471 chart tests, Kubernetes 1.37.0 and 1.35.8, a release
+rehearsal and Compose upgrades. Test release A→B1 and image rollback passed
+on Compose and Kubernetes external mode; A→B2, refusal and rollback by
+restore passed on Compose, including restoration of the original data
+values. Published 0.1.0→checkout upgrades and image rollbacks passed on
+Compose and in all three Kubernetes deployment phases. Every cleanup was
+confirmed. The four record documents were written afterwards and passed
+stage 1 and the document checks. [`TASK_2C.md`](TASK_2C.md) gives the
+acceptance matrix, tools, durations and verification limits.
+
+The final candidate's clean-clone run, public CI and the published 0.2.0
+artifact set remain pending, to be recorded after publication. External
+acceptance of task 2c is not asserted.
+
 ## Helm chart, chart version 0.1.0 — public CI passed 2026-11-17
 
 Task 2b: a Helm chart for both a self-contained evaluation deployment and an

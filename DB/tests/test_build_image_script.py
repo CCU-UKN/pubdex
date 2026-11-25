@@ -8,11 +8,14 @@ postgres.Dockerfile, then the application image's Dockerfile, both with the
 checkout as context, the labels' values as build arguments, no attestation
 and no Git metadata of buildx's own, BuildKit and never the legacy builder --
 that the images are reported through their tags, as every image store
-accepts them, that the revision label says "-dirty" for a
-working tree with changes, or with an ignored Python module of the package
+accepts them, that the revision label says "-dirty" for a working tree with
+changes, or with an ignored Python module of the package or schema change
 that the build context would take in, and "unknown" outside a Git checkout,
 that the release version cannot become the tag of either image of such a
-build, and that a failed build fails the script.
+build, that a test release's version (--version <VERSION>-test.<name>) labels
+both images and keeps the release version off their tags, that only a copy
+that is no Git checkout states its revision (--revision <commit>-dirty), and
+that a failed build fails the script.
 """
 from __future__ import annotations
 
@@ -64,7 +67,7 @@ case " $* " in
   *" status --porcelain "*)
     case ",$STUB_MODE," in *",status-fails,"*) exit 128 ;; esac
     printf '%s' "${STUB_STATUS:-}"; exit 0 ;;
-  *" ls-files --others --ignored --exclude-standard -- DB/people_pubs/*.py "*)
+  *" ls-files --others --ignored --exclude-standard -- DB/people_pubs/*.py DB/schema/*.sql "*)
     case ",$STUB_MODE," in *",ignored-fails,"*) exit 128 ;; esac
     printf '%s' "${STUB_IGNORED:-}"; exit 0 ;;
 esac
@@ -217,10 +220,12 @@ def test_a_clean_checkout_may_carry_the_release_tag_and_its_source(checkout: Che
     ("", " M DB/people_pubs/config.py\n", ""),
     ("", "?? notes.txt\n", ""),
     ("status-fails", "", ""),
-    # Git status shows no ignored file, but the build context takes this one in.
+    # Git status shows no ignored file, but the build context takes these in.
     ("", "", "DB/people_pubs/__pycache__/local_settings.py\n"),
+    ("", "", "DB/schema/0002_local_trial.sql\n"),
     ("ignored-fails", "", ""),
-], ids=["modified", "untracked", "status-unreadable", "ignored-module", "ignored-unreadable"])
+], ids=["modified", "untracked", "status-unreadable", "ignored-module", "ignored-schema-change",
+        "ignored-unreadable"])
 def test_changes_make_the_revision_dirty_and_refuse_the_release_tag(checkout: Checkout, mode: str,
                                                                     status: str, ignored: str) -> None:
     local = checkout.run(mode=mode, status=status, STUB_IGNORED=ignored)
@@ -270,9 +275,65 @@ def test_a_failed_build_fails_the_script(checkout: Checkout) -> None:
 
 @pytest.mark.parametrize("args, status", [(["--help"], 0), (["--tag"], 2), (["--tag", ""], 2),
                                           (["--postgres-tag"], 2), (["--postgres-tag", ""], 2),
-                                          (["--source"], 2), (["--push"], 2)])
+                                          (["--source"], 2), (["--push"], 2), (["--version"], 2),
+                                          (["--version", ""], 2), (["--revision"], 2), (["--revision", ""], 2)])
 def test_arguments(checkout: Checkout, args, status: int) -> None:
     proc = checkout.run(*args)
     assert proc.returncode == status
     assert "usage: build_image.sh" in (proc.stdout if status == 0 else proc.stderr)
     assert checkout.calls("docker") == []
+
+
+def test_a_test_release_labels_its_version_and_never_carries_the_release_tag(checkout: Checkout) -> None:
+    proc = checkout.run("--version", "0.1.0-test.a", "--tag", "pubdex-release:0.1.0-test.a",
+                        "--postgres-tag", "pubdex-postgres-release:0.1.0-test.a", status=" M README.md\n")
+    assert proc.returncode == 0, proc.stderr
+    for dockerfile in ("Dockerfile", "postgres.Dockerfile"):
+        args = _build_args(checkout.build(dockerfile))
+        assert args["PEOPLE_PUBS_VERSION"] == "0.1.0-test.a"
+        assert args["PEOPLE_PUBS_REVISION"] == f"{COMMIT}-dirty"
+    assert "release version    0.1.0-test.a" in proc.stdout
+    assert "A test release's version: these are local builds, never published." in proc.stdout
+    # Not even a checkout without changes gives a test release's image the
+    # release version as tag.
+    (checkout.state / "events").unlink()
+    for option in ("--tag", "--postgres-tag"):
+        refused = checkout.run("--version", "0.1.0-test.a", option, "registry.example.org/team/pubdex:0.1.0")
+        assert refused.returncode == 1
+        assert "never carry the release version 0.1.0 as tag" in refused.stderr
+    assert checkout.builds() == []
+
+
+@pytest.mark.parametrize("version", ["0.1.0", "0.1.0-rc.1", "0.1.0-test.A", "0.1.0-test.", "0.1.0-test.a.b",
+                                     "0.1.0-test.a-b", "v0.1.0-test.a", "0.1.0-testing"])
+def test_version_takes_only_a_test_releases_version(checkout: Checkout, version: str) -> None:
+    proc = checkout.run("--version", version)
+    assert proc.returncode == 2 and "--version takes only a test release's version" in proc.stderr
+    assert checkout.calls("docker") == []
+
+
+def test_a_test_releases_version_belongs_to_the_version_file(checkout: Checkout) -> None:
+    proc = checkout.run("--version", "0.2.0-test.a")
+    assert proc.returncode == 1 and "does not name a test release of VERSION 0.1.0" in proc.stderr
+    (checkout.root / "VERSION").write_text("0.1.0-rc.1\n", encoding="utf-8")
+    proc = checkout.run("--version", "0.1.0-test.a")
+    assert proc.returncode == 1 and "for a VERSION without a pre-release part" in proc.stderr
+    assert checkout.builds() == []
+
+
+def test_only_a_copy_outside_a_git_checkout_states_its_revision(checkout: Checkout) -> None:
+    stated = f"{COMMIT}-dirty"
+    proc = checkout.run("--version", "0.1.0-test.b1", "--revision", stated, mode="no-checkout")
+    assert proc.returncode == 0, proc.stderr
+    assert _build_args(checkout.build())["PEOPLE_PUBS_REVISION"] == stated
+    assert _build_args(checkout.build("postgres.Dockerfile"))["PEOPLE_PUBS_REVISION"] == stated
+    (checkout.state / "events").unlink()
+    inside = checkout.run("--version", "0.1.0-test.b1", "--revision", stated)
+    assert inside.returncode == 1 and f"is one, at revision {COMMIT}, which the label records" in inside.stderr
+    assert checkout.builds() == []
+    alone = checkout.run("--revision", stated, mode="no-checkout")
+    assert alone.returncode == 2 and "--revision needs --version" in alone.stderr
+    for revision in (COMMIT, COMMIT[:12] + "-dirty", "unknown", f"{COMMIT}-modified"):
+        refused = checkout.run("--version", "0.1.0-test.b1", "--revision", revision, mode="no-checkout")
+        assert refused.returncode == 2 and "--revision takes only <commit>-dirty" in refused.stderr, revision
+    assert checkout.builds() == []

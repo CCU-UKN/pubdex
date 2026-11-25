@@ -7,13 +7,14 @@
 # (DB/fetch_verified.py, DB/install_pip.py, DB/install_locked.py and
 # DB/locked_files.py), the Python modules of the people_pubs package,
 # the three demonstration fixtures with their README, the four files of the
-# schema bootstrap in DB/init/, the two Compose files, create_secrets.sh,
-# set_passwords.sh and the two licences. Nothing else in
-# the checkout reaches the build context or the image, wherever it lies: not
-# .git, environment files or secret files, database data or backups, virtual
-# environments, caches, local notes or any other file in DB/init/. A new file
-# the image needs has to be added here and copied in the Dockerfile
-# explicitly.
+# schema bootstrap in DB/init/, the schema changes in DB/schema/ (every .sql
+# file there, so that a new schema change needs no line of its own), the two
+# Compose files, create_secrets.sh, set_passwords.sh and the two licences.
+# Nothing else in the checkout reaches the build context or the image,
+# wherever it lies: not .git, environment files or secret files, database
+# data or backups, virtual environments, caches, local notes or any other
+# file in DB/init/. Any other new file the image needs has to be added here
+# and copied in the Dockerfile explicitly.
 *
 !DB/requirements-pip.txt
 !DB/requirements-build.txt
@@ -31,6 +32,7 @@
 !DB/init/010_ingestion_runtime_schema.sql
 !DB/init/011_member_info_manual.sql
 !DB/init/020_role_passwords.sh
+!DB/schema/*.sql
 !compose.yaml
 !compose.postgres-port.yaml
 !create_secrets.sh

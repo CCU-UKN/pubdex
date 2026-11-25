@@ -1,0 +1,19 @@
+{
+  "version": "0.1.0",
+  "commit": "57a72dc9f27766007b51c3d16ac7aa8c6ff3798b",
+  "tag": "v0.1.0",
+  "published": "2026-11-03",
+  "platform": "linux/amd64",
+  "images": {
+    "application": "ghcr.io/ccu-ukn/pubdex:0.1.0@sha256:24d570015b20f222c767a8bb89dd18d792abbd25cc730137f7b8bc285df6a325",
+    "postgres": "ghcr.io/ccu-ukn/pubdex-postgres:0.1.0@sha256:33988fb179e2065e653ad7813cecf812c21f4381537b8b8db546ad37236b780a"
+  },
+  "schema_changes": [],
+  "transform_version": "1.5.3",
+  "floor": null,
+  "chart": {
+    "version": "0.1.0",
+    "commit": "a86d5e04a8a41795d476c5d1655bbee5b05150a7",
+    "package": null
+  }
+}

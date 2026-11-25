@@ -1,24 +1,33 @@
 """run_cluster_acceptance.sh, stage 9 of run_ci_suite.sh, offline.
 
 The real script runs from a scratch copy of the files it uses, with the real
-create_secrets.sh, shell libraries and the chart's values.yaml and external
-example. docker, uname, build_image.sh and the pinned helm, kubectl and kind
-are stubs: one Python program behind a small wrapper each, which logs every
-call with its arguments, environment, working directory and the values files
-helm is given, and keeps an inventory of the containers, networks, volumes,
-image tags and node images it was asked to create. The copy of
-DB/lib/cluster_tools.sh pins the wrappers' SHA-256. The stub kind writes a
-kubeconfig whose server a control file can point elsewhere; the stub docker
-answers crictl in the node.
+create_secrets.sh, shell libraries, release record and its reader, schema
+changes and the chart's values.yaml and external example. docker, uname,
+build_image.sh, release.sh, the history's reader and the pinned helm,
+kubectl and kind are stubs: one Python program behind a small wrapper each,
+which logs every call with its arguments, environment, working directory and
+the values files helm is given, and keeps an inventory of the containers,
+networks, volumes, image tags and node images it was asked to create. The
+copy of DB/lib/cluster_tools.sh pins the wrappers' SHA-256. The stub kind
+writes a kubeconfig whose server a control file can point elsewhere; the
+stub docker answers crictl in the node and lists images by label; the stub
+release.sh writes a test release's directory -- IMAGES, a chart package and
+a source archive with the scratch checkout's schema changes, and B1's one
+more -- and tags its two images with their version and transform labels.
 
 That proves, without Docker or a cluster: the usage errors; that every
 refused prerequisite creates nothing; that the dry run of step 5 admits,
 after revision 1's objects, those of the guide's two ingress examples and
 of the evaluation values with the six scheduling keys, each file on its
 own, without helm test's pod, and installs none of them; that revision 1
-runs the chart's default images, which the node pulls by digest, and that
-without access to their registry the run fails with a message that says so and installs
-nothing; that given images which are the published ones are refused; that a kubeconfig naming another
+is the preceding PubDex release of the release record, its chart taken from
+the repository's history at the commit the record names and its published
+images by digest, which the node pulls, and that without access to their
+registry the run fails with a message that says so and installs nothing;
+that a release record without the preceding release, a malformed entry, a
+clone without the chart's commit and a chart of another version stop the
+run before anything is created; that given images which are the published
+ones are refused; that a kubeconfig naming another
 server, or more than the run's context, stops the run before any kubectl or
 helm call that could reach a cluster; that every kubectl and helm call names
 the run's kubeconfig and context and receives nothing of a polluted caller's
@@ -34,8 +43,9 @@ The floor -- the second cluster, of the oldest supported Kubernetes
 release -- is checked from the script's text: its step numbers and header
 agree; it starts only after the first cluster and its network are deleted,
 from the pinned floor node image; no published image is pulled or loaded
-before its install, which uses the chart's default images; its operator
-has the same values admitted as step 5 before the audit log is checked; no
+before its install, which uses the preceding release's chart and images;
+its operator has the same dry runs as step 5 before the audit log is
+checked; no
 option or environment variable skips a step; and the Role its operator holds grants
 exactly the rights KUBERNETES.md lists under "Access rights", read from the
 guide's words with a fixed meaning for each.
@@ -45,7 +55,8 @@ password change, whose upgrade alone has the admin Secret, a routine upgrade
 with the setup switched off, a rollback to revision 1 and the uninstall each
 run without that Secret, and each shows from the API server's replayed watch
 that it created nothing, while the same replay around the password change's
-upgrade has to find the setup's three objects; the replay reports what was
+upgrade has to find the setup's three objects and the schema upgrade's two;
+the replay reports what was
 created and fails, never passes, when the API server cannot replay.
 
 The guide's short commands are checked from the script's text and by
@@ -58,6 +69,21 @@ each ingestion job's log is followed to its end and compared with the log
 read afterwards; and step 15 runs the export in the attached pod with the
 roster import's options, accepting only the export's CSV with the
 demonstration's publication on standard output.
+
+Test releases A and B1 are checked by running the script against the stubs
+up to the first install: release.sh builds A, then B1 with the overlay b1,
+each into the run's directory and with TMPDIR there, before the cluster
+exists; a failed build, a release whose source archive holds other schema
+changes than this checkout's (A) or than those and one more (B1), and two
+releases of one transform version stop the run; both images of each are
+loaded into the node, after the images under test; and the cleanup removes
+their images by tag and, a dangling one included, by their version label,
+while a missing SBOM
+tool or buildx plugin, or a VERSION with a pre-release part, stops the run
+before anything is created. Steps 22 to 26, which install A from its chart
+package file, try B1 as a routine upgrade with a short timeout, upgrade to
+B1 with the setup and roll back to A, are checked from the script's text,
+and the check of B1's not-ready answer runs on sample answers.
 """
 from __future__ import annotations
 
@@ -77,6 +103,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+import release_record
 from people_pubs.sync.export_publications import write_publications_csv
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -84,7 +111,10 @@ SCRIPT = ROOT / "run_cluster_acceptance.sh"
 PINS = ROOT / "DB" / "lib" / "cluster_tools.sh"
 BASH = shutil.which("bash") or "/bin/bash"
 VENV_PYTHON = ROOT / ".venv" / "bin" / "python"
-LIBRARIES = ("disposable_postgres.sh", "docker_versions.sh", "release_identity.sh", "compose_acceptance.sh")
+LIBRARIES = ("disposable_postgres.sh", "docker_versions.sh", "release_identity.sh", "compose_acceptance.sh",
+             "sbom_tool.sh")
+SYFT_IMAGE = re.search(r"^readonly PINNED_SYFT_IMAGE=(\S+)$",
+                       (ROOT / "DB" / "lib" / "sbom_tool.sh").read_text(encoding="utf-8"), re.M).group(1)
 # What steps 5 and 25 admit in a dry run besides revision 1, in this order.
 ADMITTED_VALUES = ("charts/pubdex/examples/values-ingress-tls.yaml",
                    "charts/pubdex/examples/values-ingress-cert-manager.yaml", "charts/tests/values/evaluation.yaml")
@@ -100,11 +130,16 @@ TOOLS = {tool: Path(".tools") / f"{tool}-{_pin(f'PINNED_{tool.upper()}_VERSION')
 HASH_PINS = {"helm": "PINNED_HELM_MEMBER_SHA256", "kubectl": "PINNED_KUBECTL_SHA256", "kind": "PINNED_KIND_SHA256"}
 
 
+def _preceding() -> dict:
+    """The release record's entry of the preceding PubDex release: revision 1."""
+    record = release_record.Record(ROOT)
+    return record.entry(record.preceding()[0])
+
+
 def _published() -> tuple:
-    """The chart's default images, by registry, repository, tag and digest: revision 1's."""
-    values = yaml.safe_load((ROOT / "charts" / "pubdex" / "values.yaml").read_text(encoding="utf-8"))
-    return tuple(f'{image["registry"]}/{image["repository"]}:{image["tag"]}@{image["digest"]}'
-                 for image in (values["image"], values["postgresImage"]))
+    """Revision 1's images, by registry, repository, tag and digest, from the release record."""
+    images = _preceding()["images"]
+    return images["application"], images["postgres"]
 
 
 def _repo_digest(reference: str) -> str:
@@ -162,7 +197,15 @@ def docker():
         print(control("compose", "5.7.0"))
         return 0
     if first == "ps":
-        print("\n".join(labelled(state["containers"], after("--filter"))))
+        if after("--filter").startswith("label="):
+            print("\n".join(labelled(state["containers"], after("--filter"))))
+        return 0
+    if first == "buildx":
+        return 1 if control("buildx-missing") else 0
+    if first == "image" and second == "ls":
+        key, _, value = after("--filter")[len("label="):].partition("=")
+        print("\n".join(sorted({image["id"] for image in state["images"].values()
+                                if image["labels"].get(key) == value})))
         return 0
     if first == "network":
         if second == "ls":
@@ -195,7 +238,10 @@ def docker():
             print(image["labels"].get(re.search(r'Labels "([^"]+)"', fmt).group(1), ""))
         return 0
     if first == "image" and second == "rm":
-        state["images"].pop(args[2], None)
+        if args[-1].startswith("sha256:"):
+            state["images"] = {name: image for name, image in state["images"].items() if image["id"] != args[-1]}
+        else:
+            state["images"].pop(args[-1], None)
     elif first == "tag":
         if args[1] not in state["images"]:
             return 1
@@ -275,6 +321,42 @@ def build():
     return 0
 
 
+def release():
+    # release.sh build --test <name> [--overlay b1] --out <dir>: the test
+    # release's directory and its two images, as release.sh writes them.
+    import io, tarfile
+    if control("release-fails"):
+        print("release.sh: the build failed")
+        return 1
+    state = load()
+    checkout, name, overlay, out = HERE / "checkout", after("--test"), after("--overlay"), Path(after("--out"))
+    version = (checkout / "VERSION").read_text(encoding="utf-8").split()[0] + "-test." + name
+    transform = "1.5.4" + ("+test" if overlay and not control("same-transform") else "")
+    out.mkdir(parents=True)
+    lines = []
+    for role, repository in (("application", "pubdex-release"), ("postgres", "pubdex-postgres-release")):
+        image_id = "sha256:" + uuid.uuid4().hex * 2
+        state["images"][f"{repository}:{version}"] = {"id": image_id, "labels": {
+            "org.opencontainers.image.version": version, "pubdex.transform-version": transform}}
+        lines.append(f"{role} {repository}:{version} {image_id}")
+    if control("release-dangling"):
+        state["images"]["<none>:" + uuid.uuid4().hex] = {"id": "sha256:" + uuid.uuid4().hex * 2,
+                                                         "labels": {"org.opencontainers.image.version": version}}
+    save(state)
+    (out / "IMAGES").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    (out / f"pubdex-{version}.tgz").write_text("chart package", encoding="utf-8")
+    changes = {path.name: path.read_bytes() for path in sorted((checkout / "DB" / "schema").glob("*.sql"))}
+    last = max(int(change[:4]) for change in changes)
+    if (overlay == "b1") != bool(control("b1-no-change" if overlay else "a-extra-change")):
+        changes[f"{last + 1:04d}_test_overlay_compatible.sql"] = b"-- backward-compatible: yes\n"
+    with tarfile.open(out / f"pubdex-{version}-source.tar.gz", "w:gz") as archive:
+        for change, content in changes.items():
+            member = tarfile.TarInfo(f"pubdex-{version}/DB/schema/{change}")
+            member.size = len(content)
+            archive.addfile(member, io.BytesIO(content))
+    return 0
+
+
 def kind():
     state = load()
     if args[:1] == ["version"]:
@@ -347,8 +429,29 @@ def uname():
     return 0
 
 
-sys.exit({"docker": docker, "build_image": build, "kind": kind, "kubectl": kubectl, "helm": helm,
-          "uname": uname}[tool]())
+def git():
+    # git -C <checkout> <command> ...: the object store holds the preceding
+    # release's commit, unless the control file says it is missing; anything
+    # else answers as outside a repository.
+    command = args[2] if args[:1] == ["-C"] else (args + [""])[0]
+    if command == "cat-file":
+        if control("commit-missing"):
+            print(f"fatal: Not a valid object name {args[-1]}", file=sys.stderr)
+            return 128
+        return 0
+    if command == "archive":
+        import io, tarfile
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode="w") as archive:
+            archive.add(HERE / "history" / "charts", arcname="charts")
+        sys.stdout.buffer.write(buffer.getvalue())
+        return 0
+    print("fatal: not a git repository", file=sys.stderr)
+    return 128
+
+
+sys.exit({"docker": docker, "build_image": build, "release": release, "kind": kind, "kubectl": kubectl,
+          "helm": helm, "uname": uname, "git": git}[tool]())
 '''
 
 
@@ -366,9 +469,11 @@ class Fake:
         self.control.mkdir()
         (tmp_path / "stub.py").write_text(STUB.replace("@KUBECTL_VERSION@", _pin("PINNED_KUBECTL_VERSION")),
                                           encoding="utf-8")
+        # The SBOM tool's image is on the machine, as ./release.sh setup leaves it.
         (tmp_path / "state.json").write_text(json.dumps(
             {"containers": {}, "networks": {"kind": {"labels": {}}, "bridge": {"labels": {}}},
-             "images": {}, "volumes": [], "pulled": []}), encoding="utf-8")
+             "images": {SYFT_IMAGE: {"id": "sha256:" + "5" * 64, "labels": {}}}, "volumes": [], "pulled": []}),
+            encoding="utf-8")
         self.script = self.root / SCRIPT.name
         self.script.parent.mkdir(parents=True)
         shutil.copy2(SCRIPT, self.script)
@@ -383,6 +488,16 @@ class Fake:
         (self.root / "DB" / "lib").mkdir(parents=True)
         for name in LIBRARIES:
             shutil.copy2(ROOT / "DB" / "lib" / name, self.root / "DB" / "lib" / name)
+        shutil.copy2(ROOT / "DB" / "release_record.py", self.root / "DB" / "release_record.py")
+        shutil.copytree(ROOT / "DB" / "schema", self.root / "DB" / "schema")
+        shutil.copytree(ROOT / "releases", self.root / "releases")
+        # What the stub git archive gives as the preceding release's chart:
+        # its version, values and external example, with this checkout's.
+        history = tmp_path / "history" / "charts" / "pubdex"
+        (history / "examples").mkdir(parents=True)
+        (history / "Chart.yaml").write_text(f"version: {_preceding()['chart']['version']}\n", encoding="utf-8")
+        for name in ("values.yaml", "examples/values-external.yaml"):
+            shutil.copy2(ROOT / "charts" / "pubdex" / name, history / name)
         self.bindir = tmp_path / "bin"
         pins = PINS.read_text(encoding="utf-8")
         for tool, relative in TOOLS.items():
@@ -391,8 +506,10 @@ class Fake:
             pins = re.sub(rf"^readonly {HASH_PINS[tool]}=\S+$", f"readonly {HASH_PINS[tool]}={digest}", pins, flags=re.M)
         (self.root / "DB" / "lib" / "cluster_tools.sh").write_text(pins, encoding="utf-8")
         _executable(self.root / "build_image.sh", self._wrapper("build_image"))
+        _executable(self.root / "release.sh", self._wrapper("release"))
         _executable(self.bindir / "docker", self._wrapper("docker"))
         _executable(self.bindir / "uname", self._wrapper("uname"))
+        _executable(self.bindir / "git", self._wrapper("git"))
         _executable(self.root / ".venv" / "bin" / "python", f'#!/bin/sh\nexec "{VENV_PYTHON}" "$@"\n')
         self.tmpdir = tmp_path / "tmpdir"
         self.tmpdir.mkdir()
@@ -420,9 +537,18 @@ class Fake:
     def state(self) -> dict:
         return json.loads((self.tmp / "state.json").read_text(encoding="utf-8"))
 
+    def edit_state(self, change) -> None:
+        state = self.state()
+        change(state)
+        (self.tmp / "state.json").write_text(json.dumps(state), encoding="utf-8")
+
+    def images(self) -> set:
+        """The image tags Docker has, but the SBOM tool's, which the run never touches."""
+        return set(self.state()["images"]) - {SYFT_IMAGE}
+
     def created_anything(self) -> bool:
         state = self.state()
-        return bool(state["containers"] or state["images"] or state["volumes"]
+        return bool(state["containers"] or self.images() or state["volumes"]
                     or set(state["networks"]) != {"kind", "bridge"} or list(self.tmpdir.iterdir()))
 
 
@@ -459,12 +585,6 @@ def test_usage_errors(tmp_path: Path, args: list, env: dict, message: str) -> No
     assert fake.calls() == []
 
 
-def _unpin_digest(fake: Fake) -> None:
-    values = fake.root / "charts" / "pubdex" / "values.yaml"
-    values.write_text(re.sub(r'digest: "sha256:[0-9a-f]+"', 'digest: ""', values.read_text(encoding="utf-8"), count=1),
-                      encoding="utf-8")
-
-
 def _break_tool(fake: Fake, tool: str) -> None:
     (fake.root / TOOLS[tool]).write_text(fake._wrapper(tool) + "# changed\n", encoding="utf-8")
 
@@ -482,7 +602,15 @@ def _break_tool(fake: Fake, tool: str) -> None:
         (lambda fake: (fake.root / ".venv" / "bin" / "python").unlink(), "./setup_venv.sh"),
         (lambda fake: fake.set("helm-version", "3.22.1"), "helm reports the version 'v3.22.1'"),
         (lambda fake: fake.set("kind-version", "0.31.0"), "not the pinned v0.33.0"),
-        (lambda fake: _unpin_digest(fake), "image in values.yaml names no published image"),
+        (lambda fake: shutil.rmtree(fake.root / "releases"), "the release record names no preceding PubDex release"),
+        (lambda fake: (fake.root / "releases" / "0.1.0" / "release.json").write_text("{}", encoding="utf-8"),
+         "releases/0.1.0/release.json: has the fields"),
+        (lambda fake: fake.set("commit-missing"), "A shallow clone lacks it; fetch the whole history"),
+        (lambda fake: fake.edit_state(lambda state: state["images"].pop(SYFT_IMAGE)),
+         "the pinned SBOM tool, Syft 1.57.2, is not on this machine; release.sh builds the test releases with it"),
+        (lambda fake: fake.set("buildx-missing"), "the Docker buildx plugin was not found"),
+        (lambda fake: (fake.root / "VERSION").write_text("0.2.0-rc.1\n", encoding="utf-8"),
+         "VERSION holds '0.2.0-rc.1', not a release version without a pre-release part"),
     ],
 )
 def test_a_refused_prerequisite_creates_nothing(tmp_path: Path, setup, message: str) -> None:
@@ -491,7 +619,7 @@ def test_a_refused_prerequisite_creates_nothing(tmp_path: Path, setup, message: 
     proc = fake.run()
     assert proc.returncode == 1 and message in proc.stderr
     assert not fake.created_anything(), "no network, cluster, image tag or temporary directory"
-    assert fake.calls("build_image") == [] and _cluster_calls(fake) == []
+    assert fake.calls("build_image") == [] and fake.calls("release") == [] and _cluster_calls(fake) == []
     assert [call["args"][:2] for call in fake.calls("kind")] in ([], [["version"]])
 
 
@@ -534,7 +662,7 @@ def test_every_cluster_call_uses_the_runs_kubeconfig_and_context_only(tmp_path: 
     assert work.parent == fake.tmpdir and not work.exists(), "the run's directory, removed again"
     calls = _cluster_calls(fake)
     assert [call["args"][4:6] for call in calls if call["tool"] == "helm"] == \
-        [["template", "pubdex"]] * (1 + len(ADMITTED_VALUES)) + [["install", "pubdex"]]
+        [["template", "pubdex"]] * (2 + len(ADMITTED_VALUES)) + [["install", "pubdex"]]
     for call in calls:
         context = "--context" if call["tool"] == "kubectl" else "--kube-context"
         assert call["args"][:4] == ["--kubeconfig", str(work / "kubeconfig"), context, f"kind-{name}"], call["args"]
@@ -568,7 +696,7 @@ def test_the_cleanup_deletes_the_cluster_then_the_network_then_the_tags(tmp_path
     delete = cleanup.index(("kind", ["delete", "cluster"]))
     network = cleanup.index(("docker", ["network", "rm"]))
     tags = [index for index, call in enumerate(cleanup) if call == ("docker", ["image", "rm"])]
-    assert delete < network < tags[0] and len(tags) == 2, cleanup
+    assert delete < network < tags[0] and len(tags) == 6, "the images under test's tags and the test releases' four"
     removals = {("docker", ("rm",)), ("docker", ("network", "rm")), ("docker", ("image", "rm")),
                 ("docker", ("volume", "rm")), ("kind", ("delete", "cluster"))}
     assert not [call for call in cleanup[tags[-1] + 1:]
@@ -577,7 +705,8 @@ def test_the_cleanup_deletes_the_cluster_then_the_network_then_the_tags(tmp_path
     state = fake.state()
     assert set(state["networks"]) == {"kind", "bridge"}, "a network named kind stays"
     assert set(state["containers"]) == {"other-control-plane"}, "another cluster stays"
-    assert state["images"] == {} and state["volumes"] == [] and list(fake.tmpdir.iterdir()) == []
+    assert fake.images() == set() and state["volumes"] == [] and list(fake.tmpdir.iterdir()) == []
+    assert SYFT_IMAGE in state["images"], "the SBOM tool stays"
     assert "      cleanup: the clusters, their networks and volumes" in proc.stdout, "the confirmation, after a failure too"
     assert "PASS" not in proc.stdout and "the run failed with status 1" in proc.stderr
 
@@ -621,8 +750,8 @@ def test_the_images_load_from_an_archive_when_kind_cannot_read_the_store(tmp_pat
     fake.set("load-fails")
     _failed_install(fake)
     loads = [call["args"][:2] for call in fake.calls("kind") if call["args"][:1] == ["load"]]
-    assert loads == [["load", "docker-image"], ["load", "image-archive"]]
-    assert [call for call in fake.calls("docker") if call["args"][:1] == ["save"]]
+    assert loads == [["load", "docker-image"], ["load", "image-archive"]] * 2, "the images under test, then A's and B1's"
+    assert len([call for call in fake.calls("docker") if call["args"][:1] == ["save"]]) == 2
 
 
 def test_given_images_are_tagged_not_built_and_their_labels_checked(tmp_path: Path) -> None:
@@ -636,7 +765,7 @@ def test_given_images_are_tagged_not_built_and_their_labels_checked(tmp_path: Pa
                     "--expect-revision", "b" * 40)
     assert proc.returncode == 1 and f"expected '{'b' * 40}'" in proc.stderr
     assert fake.calls("build_image") == []
-    assert set(fake.state()["images"]) == {"example.org/pubdex:1", "example.org/pubdex-postgres:1"}, \
+    assert fake.images() == {"example.org/pubdex:1", "example.org/pubdex-postgres:1"}, \
         "the given images stay, the run's tags go"
 
 
@@ -669,15 +798,33 @@ def test_revision_1_runs_the_published_images_which_the_node_pulls_by_digest(tmp
     pulls = [call["args"][2:] for call in fake.calls("docker") if call["args"][:1] == ["exec"]
              and call["args"][2:4] == ["crictl", "pull"]]
     assert pulls == [["crictl", "pull", app], ["crictl", "pull", postgres]], "anonymously: no credential option"
-    (load,) = [call["args"] for call in fake.calls("kind") if call["args"][:2] == ["load", "docker-image"]]
+    load, releases = [call["args"] for call in fake.calls("kind") if call["args"][:2] == ["load", "docker-image"]]
     assert [tag.split(":")[0] for tag in load[4:]] == ["pubdex-cluster-acceptance", "pubdex-cluster-acceptance-postgres"], \
         "only the images under test are loaded, never a published image under another name"
+    assert [tag.split(":")[0] for tag in releases[4:]] == ["pubdex-release", "pubdex-postgres-release"] * 2, \
+        "then both images of test releases A and B1"
     (install,) = [call for call in fake.calls("helm") if call["args"][4:5] == ["install"]]
-    (values,) = install["files"].values()
-    assert yaml.safe_load(values) == {"secrets": {"name": "pubdex-credentials"}, "demo": {"enabled": True}}, \
-        "no image value: the chart's defaults, the published images"
-    assert f"revision 1 (published): {app}" in proc.stdout and postgres in proc.stdout
+    assert install["args"][6].endswith("/preceding/charts/pubdex"), "the preceding release's chart, from the history"
+    published, first = (yaml.safe_load(text) for text in install["files"].values())
+    assert first == {"secrets": {"name": "pubdex-credentials"}, "demo": {"enabled": True}}
+    shown = tuple(f'{image["registry"]}/{image["repository"]}:{image["tag"]}@{image["digest"]}'
+                  for image in (published["image"], published["postgresImage"]))
+    assert shown == (app, postgres) and set(published["image"]) == {"registry", "repository", "tag", "digest"}, \
+        "both images by digest from the release record, the chart's pull policy"
+    assert f"its images {app}" in proc.stdout and postgres in proc.stdout
     assert "the node pulled the published images by digest, anonymously" in proc.stdout
+    entry = _preceding()
+    (archive,) = [call["args"] for call in fake.calls("git") if "archive" in call["args"]]
+    assert archive[archive.index("archive") + 1:] == ["--format=tar", entry["chart"]["commit"], "charts/pubdex"]
+    assert f"revision 1's chart: charts/pubdex/ of PubDex {entry['version']} at {entry['chart']['commit']}" in proc.stdout
+
+
+def test_a_chart_of_another_version_at_the_recorded_commit_is_refused(tmp_path: Path) -> None:
+    fake = Fake(tmp_path)
+    (tmp_path / "history" / "charts" / "pubdex" / "Chart.yaml").write_text("version: 9.9.9\n", encoding="utf-8")
+    proc = fake.run()
+    assert proc.returncode == 1 and "is chart 9.9.9, not" in proc.stderr
+    assert "cleanup: the clusters" in proc.stdout and not fake.created_anything()
 
 
 def test_step_5_admits_the_ingress_examples_and_the_scheduling_values_and_installs_none(tmp_path: Path) -> None:
@@ -686,15 +833,19 @@ def test_step_5_admits_the_ingress_examples_and_the_scheduling_values_and_instal
     helm = fake.calls("helm")
     install = next(index for index, call in enumerate(helm) if call["args"][4:5] == ["install"])
     templates = [call for call in helm[:install] if call["args"][4:5] == ["template"]]
-    assert [list(call["files"]) for call in templates[1:]] == [[str(fake.root / name)] for name in ADMITTED_VALUES], \
-        "after revision 1, each file on its own, the chart's defaults under it"
+    assert [list(call["files"]) for call in templates[2:]] == [[str(fake.root / name)] for name in ADMITTED_VALUES], \
+        "after revision 1 and the upgrade, each file on its own, the chart's defaults under it"
+    assert templates[0]["args"][6].endswith("/preceding/charts/pubdex"), "revision 1: the preceding release's chart"
+    assert [name.rsplit("/", 1)[1] for name in templates[1]["files"]] == \
+        ["values-published.yaml", "values-1.yaml", "values-2.yaml"], "this checkout's chart with the upgrade's values"
     assert all(call["args"][5:8] == ["pubdex", str(fake.root / "charts" / "pubdex"), "--namespace"]
-               for call in templates), "the release's name and namespace, as for revision 1"
+               for call in templates[1:]), "the release's name and namespace, as for revision 1"
     dry_runs = [call for call in fake.calls("kubectl") if "--dry-run=server" in call["args"]]
-    assert len(dry_runs) == 1 + len(ADMITTED_VALUES), "revision 1's objects and each file's, before the install"
+    assert len(dry_runs) == 2 + len(ADMITTED_VALUES), \
+        "revision 1's objects, the upgrade's and each file's, before the install"
     assert all(call["args"][call["args"].index("--filename") + 1].endswith("/rendered-objects.yaml")
                for call in dry_runs), "objects only: helm test's pod would be refused before the install"
-    step = proc.stdout[proc.stdout.index("[5/29]"):proc.stdout.index("[6/29]")]
+    step = proc.stdout[proc.stdout.index("[5/35]"):proc.stdout.index("[6/35]")]
     for name in ADMITTED_VALUES:
         assert f"the API server admitted the objects of {name} without a warning" in step
     assert "none of the 3 is installed; helm test's pod of each is left out" in step
@@ -716,12 +867,18 @@ def test_the_values_admitted_but_not_installed_are_what_the_guide_says() -> None
 
 
 def test_the_floor_admits_the_same_values_as_the_operator_before_the_install() -> None:
-    step = _step(25)
-    order = [_at(step, 'dry_run "$WORK/rendered-objects.yaml" "the objects of revision 1"'),
+    step = _step(31)
+    order = [_at(step, 'render "$PRECEDING_CHART" "$WORK/values-published.yaml" "$WORK/values-1.yaml"\n'),
+             _at(step, 'dry_run "$WORK/rendered-objects.yaml" "the objects of revision 1, '),
+             _at(step, 'render "$CHART" "$WORK/values-published.yaml" "$WORK/values-1.yaml" "$WORK/values-2.yaml"\n'),
+             _at(step, 'dry_run "$WORK/rendered-objects.yaml" "the objects of this checkout\'s chart'),
              _at(step, "\nadmit_values\n"), _at(step, '\ncheck_audit "the Secret and the dry runs"')]
-    assert order == sorted(order), "revision 1, the three files, then no refused request of the operator"
+    assert order == sorted(order), "revision 1, the upgrade, the three files, then no refused request of the operator"
+    assert step[step.index("render "):step.index("\nadmit_values\n")] == \
+        _step(5)[_step(5).index("render "):_step(5).index("\nadmit_values\n")].replace("eval-pods", "floor/eval-pods"), \
+        "the same dry runs as step 5"
     assert step.count("\nadmit_values\n") == 1 and _step(5).count("\nadmit_values\n") == 1
-    assert "use_kubeconfig" not in step, "still as the operator of step 24"
+    assert "use_kubeconfig" not in step, "still as the operator of step 30"
     assert "helm_run" not in _step(5) + step, "nothing installed in either dry run's step"
 
 
@@ -749,7 +906,7 @@ def test_given_images_that_are_the_published_ones_are_refused(tmp_path: Path) ->
     assert proc.returncode == 1
     assert f"example.org/pubdex:1 is the published image {_published()[0]}, which revision 1 runs" in proc.stderr
     assert fake.calls("kind") == [call for call in fake.calls("kind") if call["args"][:1] == ["version"]]
-    assert set(fake.state()["images"]) == {"example.org/pubdex:1", "example.org/pubdex-postgres:1"}
+    assert fake.images() == {"example.org/pubdex:1", "example.org/pubdex-postgres:1"}
     assert not list(fake.tmpdir.iterdir())
 
 
@@ -808,9 +965,9 @@ def _script() -> str:
 
 
 def _floor_phase() -> str:
-    """The script from step 21 on: the floor's cluster and its lifecycle."""
+    """The script from step 27 on: the floor's cluster and its lifecycle."""
     text = _script()
-    return text[text.index('\nstep 21 "'):]
+    return text[text.index('\nstep 27 "'):]
 
 
 def _guide_rights(text: str) -> dict:
@@ -866,7 +1023,7 @@ def test_a_change_to_either_list_would_be_found() -> None:
 def test_the_steps_and_the_header_agree() -> None:
     text = _script()
     count = int(re.search(r"^STEPS=([0-9]+)$", text, re.M).group(1))
-    assert count == 29
+    assert count == 35
     assert [int(number) for number in re.findall(r'^step ([0-9]+) "', text, re.M)] == list(range(1, count + 1))
     header = text[:text.index("\nset -euo pipefail\n")]
     assert [int(number) for number in re.findall(r"^# +([0-9]+)\. ", header, re.M)] == list(range(1, count + 1))
@@ -891,10 +1048,13 @@ def test_the_floor_pulls_no_published_image_before_the_install() -> None:
     loader = loader[:loader.index("\n}\n")]
     assert set(re.findall(r'"\$([A-Z_]+)"', loader)) == {"ACTIVE_CLUSTER", "APP_TAG", "PG_TAG"}, \
         "kind loads only the images under test, never a published image"
-    before = floor[:floor.index('\nstep 26 "')]
+    before = floor[:floor.index('\nstep 32 "')]
     assert "the kubelet has to pull it" in before and "helm_run install" not in before
-    (install,) = re.findall(r'^helm_run install "\$RELEASE" "\$CHART" (.*)$', floor, re.M)
-    assert install.startswith('--values "$WORK/values-1.yaml" --wait'), "revision 1: the chart's default images"
+    (install,) = re.findall(r'^helm_run install "\$RELEASE" "\$PRECEDING_CHART" (.*)$', _step(32), re.M)
+    install = " ".join(install.split())
+    assert install.startswith('--values "$WORK/values-published.yaml" --values "$WORK/values-1.yaml" --wait'), \
+        "revision 1: the preceding release's chart and its published images by digest"
+    assert len(re.findall(r"^helm_run install ", floor, re.M)) == 1, "the floor's one install"
     assert "IfNotPresent" in floor and "Successfully pulled image" in floor
 
 
@@ -937,28 +1097,28 @@ def _helm(step: str, command: str) -> list:
 
 def test_external_mode_ends_with_a_routine_upgrade_a_rollback_and_the_uninstall() -> None:
     text = _script()
-    text = text[_at(text, '\nstep 15 "'):]
+    text = text[_at(text, '\nstep 16 "'):]
     assert re.findall(r'^NAMESPACE="\$([A-Z_]+)"', text, re.M) == ["EXTERNAL_NAMESPACE", "EVAL_NAMESPACE"]
-    assert _at(text, 'NAMESPACE="$EXTERNAL_NAMESPACE"') < _at(text, '\nstep 16 "') \
-        and _at(text, '\nstep 21 "') < _at(text, 'NAMESPACE="$EVAL_NAMESPACE"'), "steps 16 to 20 act in external mode"
-    assert _step(18).startswith('\nstep 18 "External mode: a routine upgrade') and len(_helm(_step(18), "upgrade")) == 1
-    assert _step(19).startswith('\nstep 19 "External mode: rolling back to revision 1') \
-        and len(_helm(_step(19), "rollback")) == 1
-    assert _step(20).startswith('\nstep 20 "External mode: uninstalling') and len(_helm(_step(20), "uninstall")) == 1
+    assert _at(text, 'NAMESPACE="$EXTERNAL_NAMESPACE"') < _at(text, '\nstep 17 "') \
+        and _at(text, '\nstep 27 "') < _at(text, 'NAMESPACE="$EVAL_NAMESPACE"'), "steps 17 to 26 act in external mode"
+    assert _step(19).startswith('\nstep 19 "External mode: a routine upgrade') and len(_helm(_step(19), "upgrade")) == 1
+    assert _step(20).startswith('\nstep 20 "External mode: rolling back to revision 1') \
+        and len(_helm(_step(20), "rollback")) == 1
+    assert _step(21).startswith('\nstep 21 "External mode: uninstalling') and len(_helm(_step(21), "uninstall")) == 1
 
 
 def test_the_admin_secret_is_deleted_before_the_routine_upgrade_and_never_created_again() -> None:
-    password_change = _step(17)
+    password_change = _step(18)
     calls = re.findall(r"^admin_secret (create|delete)$", password_change, re.M)
-    assert calls == ["create", "delete"], "step 17 creates the admin Secret before its upgrade and deletes it after"
+    assert calls == ["create", "delete"], "step 18 creates the admin Secret before its upgrade and deletes it after"
     assert _at(password_change, "admin_secret create") < _at(password_change, "helm_run upgrade") \
         < _at(password_change, "admin_secret delete")
-    for number, operation in ((18, "helm_run upgrade"), (19, "helm_run rollback"), (20, "helm_run uninstall")):
+    for number, operation in ((19, "helm_run upgrade"), (20, "helm_run rollback"), (21, "helm_run uninstall")):
         step = _step(number)
         assert not re.search(r"^admin_secret (create|delete)$", step, re.M), f"step {number} never touches it"
         assert _at(step, "admin_secret_absent ") < _at(step, operation), \
             f"step {number} first asks the API server whether the admin Secret exists"
-    rollback = _step(19)
+    rollback = _step(20)
     assert _at(rollback, "helm_run rollback") < _at(rollback, 'admin_secret_absent "after the rollback"')
     absent = _script()[_at(_script(), "admin_secret_absent() {"):]
     assert "(NotFound)" in absent[:absent.index("\n}\n")], "only the API server's NotFound counts as absent"
@@ -966,18 +1126,18 @@ def test_the_admin_secret_is_deleted_before_the_routine_upgrade_and_never_create
 
 def test_only_the_routine_upgrade_switches_the_setup_off() -> None:
     switched = "--set externalDatabase.setup.enabled=false"
-    (routine,) = _helm(_step(18), "upgrade")
+    (routine,) = _helm(_step(19), "upgrade")
     assert switched in routine and routine.endswith('--wait --timeout "${WAIT_SECONDS}s"')
     assert '--values "$WORK/values-routine.yaml"' in routine and "--reuse-values" not in routine
-    assert re.search(r'^api: \{logLevel: WARNING\}$', _step(18), re.M), "one changed setting"
-    assert 'check_revision "routine upgrade" "$APP_TAG" "" 2 WARNING same-image' in _step(18)
+    assert re.search(r'^api: \{logLevel: WARNING\}$', _step(19), re.M), "one changed setting"
+    assert 'check_revision "routine upgrade" "$APP_TAG" "" 2 WARNING same-image' in _step(19)
     commands = re.findall(r"^helm_run (?:install|upgrade) (.*)$", re.sub(r"\\\n\s*", " ", _script()), re.M)
     assert len(commands) >= 8 and [command for command in commands if "setup.enabled" in command] == [
         f'"$RELEASE" {routine}'], "every other install and upgrade runs the setup, as external mode does by default"
 
 
 def test_without_the_admin_secret_the_upgrade_with_the_setup_fails_then_the_routine_upgrade_recovers() -> None:
-    routine_upgrade = _step(18)
+    routine_upgrade = _step(19)
     (failing,) = re.findall(r'^if job "\$\(\(WAIT_SECONDS \+ 60\)\)" helm_ upgrade "\$RELEASE" (.*) '
                             r'> "\$WORK/helm-upgrade-failed\.log" 2>&1; then$', routine_upgrade, re.M)
     (routine,) = _helm(routine_upgrade, "upgrade")
@@ -1027,30 +1187,30 @@ def test_without_the_admin_secret_the_upgrade_with_the_setup_fails_then_the_rout
 def test_the_password_change_gives_the_values_files_again() -> None:
     # --reuse-values would carry over externalDatabase.setup.enabled=false from
     # a routine upgrade, and no setup would set the new passwords.
-    (upgrade,) = _helm(_step(16), "upgrade")
-    assert _helm(_step(17), "upgrade") == [upgrade] and "setup.enabled" not in upgrade
+    (upgrade,) = _helm(_step(17), "upgrade")
+    assert _helm(_step(18), "upgrade") == [upgrade] and "setup.enabled" not in upgrade
     assert "--reuse-values" not in re.sub(r"(?m)^\s*#.*$", "", _script())
 
 
 def test_the_rollback_returns_to_revision_1_and_its_published_images() -> None:
-    rollback = _step(19)
+    rollback = _step(20)
     (command,) = _helm(rollback, "rollback")
     assert command == '1 --wait --timeout "${WAIT_SECONDS}s"'
     assert _at(rollback, "helm_run rollback") < _at(rollback, 'check_revision "external rollback" "$BASE_APP_REF" "" 1 INFO')
     assert "'^6[[:space:]].*deployed.*Rollback to 1'" in rollback, "after revision 4, failed, and 5, the routine upgrade"
     assert 'grep -qx "Job/$RELEASE-setup pre-install,pre-upgrade" "$WORK/hooks-6.txt"' in rollback, \
         "the rollback's revision carries revision 1's setup hooks, which did not run"
-    assert re.search(r'^check_revision "external revision 1" "\$BASE_APP_REF" "" 1 INFO$', _step(15), re.M)
+    assert re.search(r'^check_revision "external revision 1" "\$BASE_APP_REF" "" 1 INFO$', _step(16), re.M)
 
 
 def test_each_of_the_three_shows_that_it_created_nothing() -> None:
-    for number, operation in ((18, "helm_run upgrade"), (19, "helm_run rollback"), (20, "helm_run uninstall")):
+    for number, operation in ((19, "helm_run upgrade"), (20, "helm_run rollback"), (21, "helm_run uninstall")):
         step = _step(number)
         assert _at(step, "\nmark_hook_kinds\n") < _at(step, operation) < _at(step, "\nnothing_created "), number
     # The same replay around the password change's upgrade, which runs the
     # setup, has to find exactly the setup's three objects: the check sees
     # hooks that Helm deleted again.
-    password_change = _step(17)
+    password_change = _step(18)
     assert _at(password_change, "\nmark_hook_kinds\n") < _at(password_change, "helm_run upgrade") \
         < _at(password_change, 'setup_objects="$(created_since)"') < _at(password_change, "admin_secret delete")
     expected = re.search(r'^expected_setup="\$\(printf .*\)"$', password_change, re.M).group(0)
@@ -1058,8 +1218,11 @@ def test_each_of_the_three_shows_that_it_created_nothing() -> None:
     assert '[ "$(sort <<<"$setup_objects")" = "$expected_setup" ]' in password_change
     paths = re.search(r"^HOOK_KIND_PATHS=\((.*)\)$", _script(), re.M).group(1).split()
     watched = {path.rsplit("/", 1)[1] for path in paths}
+    assert all(f'"{kind}/$RELEASE-schema-upgrade"' in expected for kind in ("Job", "ServiceAccount")), \
+        "and the schema upgrade's hooks, which run after the setup's"
     templates = ROOT / "charts" / "pubdex" / "templates"
-    kinds = {kind.lower() + "s" for name in ("external-setup-job.yaml", "external-setup-configmap.yaml")
+    kinds = {kind.lower() + "s" for name in ("external-setup-job.yaml", "external-setup-configmap.yaml",
+                                             "schema-upgrade-job.yaml")
              for kind in re.findall(r"^kind: (\w+)$", (templates / name).read_text(encoding="utf-8"), re.M)}
     assert watched == kinds == {"jobs", "configmaps", "serviceaccounts"}, "the kinds of the setup's hooks"
 
@@ -1134,6 +1297,11 @@ def _computed_values(**changes: object) -> dict:
     """Revision 1's values as helm get values --all shows them, with <changes>
     as dotted keys."""
     values = yaml.safe_load((ROOT / "charts" / "pubdex" / "values.yaml").read_text(encoding="utf-8"))
+    for key, reference in zip(("image", "postgresImage"), _published()):
+        tagged, digest = reference.split("@")
+        repository, tag = tagged.rsplit(":", 1)
+        registry, repository = repository.split("/", 1)
+        values[key].update(registry=registry, repository=repository, tag=tag, digest=digest)
     values["secrets"]["name"], values["demo"]["enabled"] = "pubdex-credentials", True
     for dotted, value in changes.items():
         *parents, leaf = dotted.split(".")
@@ -1230,21 +1398,34 @@ def test_each_ingestion_job_s_log_is_followed_to_its_end_then_read_again() -> No
         < _at(body, 'k logs --follow "job/$run" > "$WORK/job-$1.follow"') < _at(body, 'job_ended "$run"') \
         < _at(body, 'k logs "job/$run" > "$WORK/job-$1.log"') \
         < _at(body, 'cmp -s "$WORK/job-$1.follow" "$WORK/job-$1.log"')
-    assert re.findall(r"^run_task (\w+)$", _step(15), re.M) == ["fixture", "rules"]
+    assert re.findall(r"^  run_task (\w+)$", _demonstration(), re.M) == ["fixture", "rules"]
     assert 'logs --follow "job/$run"' in NOTES.read_text(encoding="utf-8"), "the command the notes print"
 
 
-def test_step_15_exports_through_the_attached_pod_after_the_demonstration() -> None:
-    step = _step(15)
-    runs = re.findall(r'^job(?:_input)? 300 k run "\$RELEASE-run" (.*?) -- python -m people_pubs\.sync\.(\w+)\s+(.*)$',
-                      step, re.M)
+def _demonstration(raw: bool = False) -> str:
+    """The function external_demonstration, continuation lines joined unless raw."""
+    text = _script()
+    body = text[_at(text, "\nexternal_demonstration() {"):]
+    body = body[:body.index("\n}\n") + 3]
+    return body if raw else re.sub(r"\\\n\s*", " ", body)
+
+
+def test_the_demonstration_exports_through_the_attached_pod_after_the_ingestion() -> None:
+    function = _demonstration()
+    runs = re.findall(r'^  job(?:_input)? 300 k run "\$RELEASE-run" (.*?) -- python -m people_pubs\.sync\.(\w+)\s+(.*)$',
+                      function, re.M)
     assert [module for _, module, _ in runs] == ["add_people", "export_publications"]
     assert runs[0][0] == runs[1][0], "the export runs with the roster import's options and patch"
+    assert '--image="$image"' in runs[0][0], "the image of the release that runs"
     assert runs[1][2].startswith('> "$WORK/publications.csv" 2> "$WORK/export.log" ||'), \
         "standard output alone into the CSV, as in the guide"
-    assert _at(step, "\nrun_task rules\n") < _at(step, "people_pubs.sync.export_publications") \
-        < _at(step, 'read_back "external revision 1"')
-    assert 'grep -Eq "Exported $exported publications to stdout" "$WORK/export.log"' in step
+    assert _at(function, "\n  run_task rules\n") < _at(function, "people_pubs.sync.export_publications")
+    assert 'grep -Eq "Exported $exported publications to stdout" "$WORK/export.log"' in function
+    # Revision 1 of step 16 with the preceding release's image, and test release A of step 22 with A's.
+    for number, image, phase in ((16, "$BASE_APP_REF", "external revision 1"), (22, "$A_APP", "test release A")):
+        step = _step(number)
+        assert re.findall(r"^external_demonstration (.*)$", step, re.M) == [f'"{image}"'], number
+        assert _at(step, "\nexternal_demonstration ") < _at(step, f'read_back "{phase}"'), number
 
 
 def _export(rows: list, extra: str = "") -> str:
@@ -1272,5 +1453,240 @@ DEMO_ROW = {"pub_id": 7, "doi": DEMO_DOI, "title": "Synthetic Collective Behavio
 def test_the_exports_csv_is_checked_row_by_row(tmp_path: Path, content, status: int, output: str) -> None:
     csv_file = tmp_path / "publications.csv"
     csv_file.write_text(content(), encoding="utf-8")
-    proc = _run_python(_heredoc(_raw_step(15), "people_pubs.sync.export_publications"), str(csv_file), DEMO_DOI)
+    proc = _run_python(_heredoc(_demonstration(raw=True), "people_pubs.sync.export_publications"), str(csv_file),
+                       DEMO_DOI)
     assert (proc.returncode, proc.stdout) == (status, output), proc.stderr
+
+
+# ---------------------------------------------------------------------------
+# Test releases A and B1: built in step 1, loaded in step 3, run in 22 to 26
+# ---------------------------------------------------------------------------
+
+def _release_calls(fake: Fake) -> list:
+    return [call for call in fake.calls("release")]
+
+
+def test_release_sh_builds_test_releases_a_and_b1_before_the_cluster_exists(tmp_path: Path) -> None:
+    fake = Fake(tmp_path)
+    proc = _failed_install(fake)
+    a, b1 = _release_calls(fake)
+    (create,) = [call for call in fake.calls("kind") if call["args"][:2] == ["create", "cluster"]]
+    run = create["args"][create["args"].index("--name") + 1].removeprefix("pubdex-cluster-").replace("-", "")
+    work = Path(create["args"][create["args"].index("--kubeconfig") + 1]).parent
+    assert a["args"] == ["build", "--test", f"a{run}", "--out", str(work / f"release-a{run}")]
+    assert b1["args"] == ["build", "--test", f"b1{run}", "--overlay", "b1", "--out", str(work / f"release-b1{run}")]
+    for call in (a, b1):
+        assert call["env"]["TMPDIR"] == str(work / "tmp") and call["env"]["HOME"] == str(fake.home)
+        assert "KUBECONFIG" not in call["env"] and "DOCKER_CONFIG" not in call["env"]
+    calls = fake.calls()
+    assert calls.index(b1) < next(index for index, call in enumerate(calls)
+                                  if call["tool"] == "kind" and call["args"][:2] == ["create", "cluster"])
+    version = (ROOT / "VERSION").read_text(encoding="utf-8").split()[0]
+    change = f"{max(int(path.name[:4]) for path in (ROOT / 'DB' / 'schema').glob('*.sql')) + 1:04d}_test_overlay_compatible"
+    assert f"test release B1 adds the schema change {change} to A's and carries the transform version 1.5.4+test, A 1.5.4" \
+        in proc.stdout
+    (load,) = [call["args"] for call in fake.calls("kind") if call["args"][:2] == ["load", "docker-image"]
+               and call["args"][4].startswith("pubdex-release:")]
+    assert load[4:] == [f"{repository}:{version}-test.{name}{run}" for name in ("a", "b1")
+                        for repository in ("pubdex-release", "pubdex-postgres-release")], \
+        "both images of each: the setup Job runs the PostgreSQL image"
+    assert not fake.created_anything(), "both test releases' images and directories are gone"
+
+
+@pytest.mark.parametrize("control, message", [
+    ("release-fails", "release.sh build --test a"),
+    ("a-extra-change", "test release A ships the schema changes"),
+    ("b1-no-change", "not this checkout's and one more"),
+    ("same-transform", "test releases A and B1 carry the same transform version"),
+])
+def test_a_test_release_that_fails_or_ships_the_wrong_changes_stops_the_run(tmp_path: Path, control: str,
+                                                                           message: str) -> None:
+    fake = Fake(tmp_path)
+    fake.set(control)
+    proc = fake.run()
+    assert proc.returncode == 1 and message in proc.stderr
+    assert not [call for call in fake.calls("kind") if call["args"][:2] == ["create", "cluster"]], \
+        "step 1 stops the run before the cluster exists"
+    assert not fake.created_anything() and "cleanup: the clusters" in proc.stdout
+
+
+def test_the_cleanup_removes_the_test_releases_images_by_their_version_label(tmp_path: Path) -> None:
+    fake = Fake(tmp_path)
+    fake.set("release-dangling")
+    _failed_install(fake)
+    removed = [call["args"] for call in fake.calls("docker") if call["args"][:3] == ["image", "rm", "-f"]]
+    assert len(removed) == 2 and all(args[3].startswith("sha256:") for args in removed), \
+        "the dangling image of each test release, by its id"
+    listed = [call["args"] for call in fake.calls("docker") if call["args"][:2] == ["image", "ls"]]
+    assert {args[-1].rsplit("=", 1)[0] for args in listed} == {"label=org.opencontainers.image.version"}
+    assert not fake.created_anything()
+
+
+def test_test_releases_a_to_b1_run_in_external_mode_on_the_first_cluster() -> None:
+    text = _script()
+    order = [_at(text, f'\nstep {number} "') for number in range(21, 28)]
+    assert order == sorted(order)
+    for number in range(22, 27):
+        step = _step(number)
+        assert step.startswith(f'\nstep {number} "External mode: '), number
+        assert "NAMESPACE=" not in step and "use_kubeconfig" not in step and "create_cluster" not in step, number
+    (install,) = [" ".join(line.split()) for line in _helm(_step(22), "install")]
+    assert install.startswith('"$A_PACKAGE" --values "$EXTERNAL_EXAMPLE" --values "$WORK/values-external.yaml" '
+                              '--values "$WORK/values-a.yaml" --wait'), "A, from its chart package file"
+    (upgrade,) = [" ".join(line.split()) for line in _helm(_step(24), "upgrade")]
+    assert upgrade.startswith('"$B1_PACKAGE" --values "$EXTERNAL_EXAMPLE" --values "$WORK/values-external.yaml" '
+                              '--values "$WORK/values-b1.yaml" --wait'), "B1, from its chart package file"
+    assert _helm(_step(25), "rollback") == ['1 --wait --timeout "${WAIT_SECONDS}s"']
+    assert len(_helm(_step(26), "uninstall")) == 1
+    assert "$A_PACKAGE" not in text[_at(text, '\nstep 27 "'):] and "$B1_PACKAGE" not in text[_at(text, '\nstep 27 "'):]
+
+
+def test_both_images_of_each_test_release_are_set_explicitly() -> None:
+    step = _step(22)
+    for name, app, postgres in (("a", "A_APP", "A_PG"), ("b1", "B1_APP", "B1_PG")):
+        values = re.search(rf'^cat > "\$WORK/values-{name}\.yaml" <<YAML\n(.*?)^YAML$', step, re.S | re.M).group(1)
+        assert values.splitlines() == [
+            f'image: {{registry: "", repository: ${{{app}%:*}}, tag: "${{{app}##*:}}", digest: "", pullPolicy: Never}}',
+            f'postgresImage: {{registry: "", repository: ${{{postgres}%:*}}, tag: "${{{postgres}##*:}}", digest: "", '
+            "pullPolicy: Never}"], name
+    assert 'check_revision "test release A" "$A_APP" "" 1 INFO' in step
+    assert 'check_revision "test release B1" "$B1_APP" "" 1 INFO' in _step(24)
+    assert 'check_revision "rollback to A" "$A_APP" "" 1 INFO' in _step(25)
+
+
+def test_each_test_release_uses_the_external_example_from_its_package(tmp_path: Path) -> None:
+    import io
+    import tarfile
+
+    function = "package_example() {" + _script().split("package_example() {", 1)[1].split("\n}", 1)[0] + "\n}"
+    work = tmp_path / "work"
+    work.mkdir()
+    for number, name in ((22, "A"), (23, "B1"), (24, "B1")):
+        step = _step(number)
+        assert _at(step, f'package_example "${name}_PACKAGE"') < _at(step, 'helm_run' if number != 23 else 'helm_ upgrade')
+        content = f"# example from test release {name}\n".encode()
+        package = tmp_path / f"{name}.tgz"
+        with tarfile.open(package, "w:gz") as archive:
+            member = tarfile.TarInfo("pubdex/examples/values-external.yaml")
+            member.size = len(content)
+            archive.addfile(member, io.BytesIO(content))
+        proc = subprocess.run([BASH, "-c", function + '\nfail() { echo "$1" >&2; exit 1; }\n'
+                               'package_example "$1"\nprintf "%s" "$EXTERNAL_EXAMPLE"', "example", str(package)],
+                              env=dict(os.environ, WORK=str(work), EXTERNAL_EXAMPLE="checkout-example.yaml"),
+                              capture_output=True, text=True, check=False)
+        assert proc.returncode == 0, proc.stderr
+        example = Path(proc.stdout)
+        assert example == work / "pubdex" / "examples" / "values-external.yaml"
+        assert example.read_bytes() == content
+
+
+def test_the_server_is_emptied_before_a_installs() -> None:
+    step = _step(22)
+    order = [_at(step, '[ "$roles" = "app_readonly app_writer maintenance" ]'),
+             _at(step, '-c "DROP DATABASE $DATABASE WITH (FORCE)"'),
+             _at(step, '-c "DROP ROLE app_readonly, app_writer, maintenance"'),
+             _at(step, '-c "CREATE DATABASE $DATABASE OWNER $ADMIN_USER"'),
+             _at(step, 'managed_server "with its database created again"'),
+             _at(step, 'secret_files "$WORK/external-a"'), _at(step, "\nadmin_secret create\n"),
+             _at(step, "helm_run install"), _at(step, "\nadmin_secret delete\n"),
+             _at(step, 'record_is server_sql "$A_RECORD" "test release A"'),
+             _at(step, 'external_demonstration "$A_APP"'), _at(step, 'stamped "$A_TRANSFORM" "test release A"')]
+    assert order == sorted(order)
+    assert '--dbname postgres -c "DROP DATABASE' in step, "the database is dropped from another one"
+    assert 'managed_server "its start"' in _step(15), "the same check as the server's start"
+
+
+def test_the_routine_upgrade_to_b1_cannot_complete_and_shows_why() -> None:
+    step = _step(23)
+    (failing,) = re.findall(r'^if job "\$\(\(SHORT_WAIT_SECONDS \+ 60\)\)" helm_ upgrade "\$RELEASE" (.*) '
+                            r'> "\$WORK/helm-upgrade-b1\.log" 2>&1; then$', step, re.M)
+    (with_setup,) = _helm(_step(24), "upgrade")
+    words = failing.split()
+    assert words[:3] == ['"$B1_PACKAGE"', "--namespace", '"$NAMESPACE"']
+    assert words[3:] == [word for word in with_setup.split()[1:] if word not in ('"${WAIT_SECONDS}s"',)] \
+        [:-2] + ["--set", "externalDatabase.setup.enabled=false", "--wait", "--timeout", '"${SHORT_WAIT_SECONDS}s"'], \
+        "the same upgrade as step 24's, with the setup switched off and the short timeout"
+    assert re.search(r"^SHORT_WAIT_SECONDS=[0-9]+$", _script(), re.M)
+    assert not re.search(r"^admin_secret (create|delete)$", step, re.M)
+    order = [
+        'admin_secret_absent "before the routine upgrade to B1"', "\nmark_hook_kinds\n", "helm_ upgrade",
+        '[ "$failed_after" -ge "$SHORT_WAIT_SECONDS" ]', 'nothing_created "the routine upgrade to B1"',
+        "grep -qx 'REVISION: 2'", "'^2[[:space:]].*failed'", "wait_until \"$WAIT_SECONDS\" b1_pod_started",
+        "wait_until 60 b1_probe_failed", 'start_forward "pod/$B1_POD"', "schema_upgrade_required",
+        'k logs "$B1_POD"', 'record_kept server_sql "the routine upgrade to B1"',
+        'read_back "while B1\'s pod is not ready"',
+    ]
+    positions = [_at(step, needle) for needle in order]
+    assert positions == sorted(positions)
+    commands = re.findall(r"^helm_run (?:install|upgrade) (.*)$", re.sub(r"\\\n\s*", " ", _script()), re.M)
+    assert [command for command in commands if "setup.enabled" in command] == [
+        f'"$RELEASE" {_helm(_step(19), "upgrade")[0]}'], "helm_run switches the setup off in step 19 alone"
+
+
+def test_the_upgrade_to_b1_runs_the_setup_with_the_admin_secret_then_the_rollback_without_it() -> None:
+    upgrade = _step(24)
+    assert re.findall(r"^admin_secret (create|delete)$", upgrade, re.M) == ["create", "delete"]
+    order = ["\nadmin_secret create\n", "\nmark_hook_kinds\n", "helm_run upgrade", 'setup_objects="$(created_since)"',
+             "\nadmin_secret delete\n", '[ "$(sort <<<"$setup_objects")" = "$expected_setup" ]',
+             'record_is server_sql "$B1_RECORD" "test release B1"', "backward_compatible",
+             'check_revision "test release B1"', '[ "$API_UIDS" = "$B1_POD_UID" ]', "\nrun_task fixture\n",
+             'stamped "$B1_TRANSFORM" "test release B1"', 'read_back "test release B1"']
+    positions = [_at(upgrade, needle) for needle in order]
+    assert positions == sorted(positions)
+    rollback = _step(25)
+    assert not re.search(r"^admin_secret (create|delete)$", rollback, re.M)
+    order = ['admin_secret_absent "before the rollback to A"', "\nmark_hook_kinds\n", "helm_run rollback",
+             'nothing_created "the rollback to A"', 'check_revision "rollback to A"',
+             'record_kept server_sql "the rollback to A"', "\nrun_task fixture\n",
+             'stamped "$A_TRANSFORM" "the rollback to A"', 'read_back "rollback to A"',
+             "'^4[[:space:]].*deployed.*Rollback to 1'", 'admin_secret_absent "after the rollback to A"']
+    positions = [_at(rollback, needle) for needle in order]
+    assert positions == sorted(positions)
+    assert not re.search(r"^admin_secret (create|delete)$", _step(26), re.M)
+
+
+def _not_ready(tmp_path: Path, ready: dict, publications: dict, change: str = "0002_test_overlay_compatible"):
+    for name, content in (("readyz.json", ready), ("publications.json", publications)):
+        (tmp_path / name).write_text(json.dumps(content), encoding="utf-8")
+    return _run_python(_heredoc(_raw_step(23), 'message="$("$PY" -I -'), str(tmp_path / "readyz.json"),
+                       str(tmp_path / "publications.json"), change)
+
+
+BEHIND = ("database schema version 0001; this application supports 0002 and later versions with only "
+          "backward-compatible schema changes. missing schema changes: 0002_test_overlay_compatible. "
+          "Run the schema upgrade: python -m people_pubs.schema upgrade.")
+
+
+@pytest.mark.parametrize("ready, publications, status", [
+    ({"status": "not_ready", "reason": "schema_upgrade_required", "message": BEHIND},
+     {"error": {"code": "schema_upgrade_required", "message": BEHIND}}, 0),
+    ({"status": "not_ready", "reason": "database_unavailable", "message": BEHIND},
+     {"error": {"code": "schema_upgrade_required", "message": BEHIND}}, 1),
+    ({"status": "not_ready", "reason": "schema_upgrade_required", "message": BEHIND.replace("0002_test", "0003_test")},
+     {"error": {"code": "schema_upgrade_required", "message": BEHIND.replace("0002_test", "0003_test")}}, 1),
+    ({"status": "not_ready", "reason": "schema_upgrade_required", "message": BEHIND.split(" Run ")[0]},
+     {"error": {"code": "schema_upgrade_required", "message": BEHIND.split(" Run ")[0]}}, 1),
+    ({"status": "not_ready", "reason": "schema_upgrade_required", "message": BEHIND},
+     {"error": {"code": "schema_not_supported", "message": BEHIND}}, 1),
+], ids=["the-documented-answer", "another-reason", "another-change", "no-command", "publications-differ"])
+def test_b1s_not_ready_answer_is_checked(tmp_path: Path, ready: dict, publications: dict, status: int) -> None:
+    proc = _not_ready(tmp_path, ready, publications)
+    assert proc.returncode == status, proc.stderr
+    assert proc.stdout == (BEHIND + "\n" if status == 0 else "")
+
+
+@pytest.mark.parametrize("log, warned", [
+    ('level=WARN msg="upgrade failed" name=pubdex error="resource Deployment/pubdex-external/pubdex-api not ready"\n'
+     "Error: UPGRADE FAILED: resource Deployment/pubdex-external/pubdex-api not ready\n", False),
+    ('level=WARN msg="upgrade failed" name=pubdex error="x"\nWarning: would violate PodSecurity "restricted:latest"\n',
+     True),
+    ('level=WARN msg="something else" name=pubdex\nError: UPGRADE FAILED: x\n', True),
+    ("W1119 10:05:30.000000 1 warnings.go:70] unknown field\nError: UPGRADE FAILED: x\n", True),
+], ids=["helm-s-own-failure", "pod-security", "another-helm-warning", "a-client-warning"])
+def test_the_routine_upgrade_to_b1_tolerates_only_helm_s_own_failure_line(tmp_path: Path, log: str,
+                                                                         warned: bool) -> None:
+    check = re.search(r"^if (grep -Ev .*\n\s+\| grep -Eq .*); then$", _raw_step(23), re.M).group(1)
+    (tmp_path / "helm-upgrade-b1.log").write_text(log, encoding="utf-8")
+    proc = subprocess.run([BASH, "-c", re.sub(r"\\\n", "", check).replace('"$WORK/', f'"{tmp_path}/')],
+                          capture_output=True, text=True, check=False)
+    assert (proc.returncode == 0) == warned, proc.stderr

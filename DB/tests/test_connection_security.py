@@ -19,6 +19,7 @@ import threading
 import time
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
+from unittest.mock import MagicMock
 
 import psycopg
 import pytest
@@ -192,7 +193,12 @@ def test_scram_and_no_gssapi_encryption_unless_the_configuration_sets_them() -> 
 
 def test_ingestion_connections_get_the_options_unless_configured_otherwise(monkeypatch) -> None:
     calls: list = []
-    monkeypatch.setattr(connection.psycopg, "connect", lambda *args, **kwargs: calls.append((args, kwargs)))
+    def connect(*args, **kwargs):
+        calls.append((args, kwargs))
+        return MagicMock()
+
+    monkeypatch.setattr(connection.psycopg, "connect", connect)
+    monkeypatch.setattr(connection.schema, "check_supported", lambda conn: None)
     _clean_libpq_environment(monkeypatch)
     dsn = "host=db dbname=people_db user=app_writer"
     connection.get_conn(dsn)

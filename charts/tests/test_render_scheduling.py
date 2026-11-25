@@ -3,8 +3,9 @@ affinity, podAnnotations, podLabels and priorityClassName.
 
 - Set at the top level, each reaches every pod the chart makes Kubernetes
   run: the read service, PostgreSQL with its init container, the setup Job,
-  the ingestion CronJobs' runs, the demonstration, helm test's pod and the
-  attached one-off pod of the ConfigMap <release>-run.
+  the schema upgrade's Job, the ingestion CronJobs' runs, the
+  demonstration, helm test's pod and the attached one-off pod of the
+  ConfigMap <release>-run.
 - api and postgresql may set each key for their own pods. Their value
   replaces the top-level one, never merged with it, even when it is {}, []
   or ""; left out or null, the top-level one applies.
@@ -37,9 +38,9 @@ EXTERNAL = (*DEFAULT, "--set", "mode=external", "--set", "externalDatabase.host=
             "--set", "externalDatabase.setup.adminSecret.name=pubdex-db-admin", *TASK)
 # The pods each mode renders, as (kind of the declaring object, component).
 EVALUATION_PODS = {("Deployment", "api"), ("StatefulSet", "postgresql"), ("CronJob", "ingest"), ("Job", "demo"),
-                   ("Pod", "test"), ("ConfigMap", "ingest")}
-EXTERNAL_PODS = {("Deployment", "api"), ("Job", "setup"), ("CronJob", "ingest"), ("Pod", "test"),
-                 ("ConfigMap", "ingest")}
+                   ("Job", "schema-upgrade"), ("Pod", "test"), ("ConfigMap", "ingest")}
+EXTERNAL_PODS = {("Deployment", "api"), ("Job", "setup"), ("Job", "schema-upgrade"), ("CronJob", "ingest"),
+                 ("Pod", "test"), ("ConfigMap", "ingest")}
 
 # A value of each key, as an operator sets it at the top level ...
 TOP = {

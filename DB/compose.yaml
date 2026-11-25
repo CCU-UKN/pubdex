@@ -1,3 +1,10 @@
+# The development setup (QUICKSTART.md, DB/README.md): PostgreSQL, which
+# bootstraps the baseline from init/ when it starts on an empty volume, and
+# pgAdmin. PubDex itself runs from the virtual environment on the host, and
+# so does the schema upgrade, which brings the database to the schema of the
+# checkout: run it after the first start and after every update of the
+# checkout, as the superuser DB/.env names. A second run changes nothing.
+#   (cd DB && ../.venv/bin/python -m people_pubs.schema upgrade)
 services:
   postgres:
     image: postgres:16

@@ -269,14 +269,15 @@ def test_a_database_that_cannot_be_reached_is_reported_within_the_wait(service_s
         assert absent not in text and "FATAL" not in text and "127.0.0.1" not in text
 
 
-def test_a_read_surface_the_role_cannot_use_is_reported(service_settings) -> None:
-    # maintenance has no USAGE on biblio.
+def test_a_schema_record_the_role_cannot_read_is_reported(service_settings) -> None:
+    # maintenance has no USAGE on pubdex.
     with serving(service_settings(role="maintenance")) as (app, _):
         ready = get(app, "/readyz")
         page = get(app, "/v0/publications")
     assert ready.status_code == 503
-    assert ready.json() == {"status": "not_ready", "reason": "read_surface_unavailable"}
-    assert page.status_code == 503 and page.json()["error"]["code"] == "read_surface_unavailable"
+    assert ready.json()["reason"] == "schema_not_supported"
+    assert "schema version unreadable" in ready.json()["message"]
+    assert page.status_code == 503 and page.json()["error"]["code"] == "schema_not_supported"
     assert "permission" not in page.text and "biblio" not in page.text
 
 

@@ -18,10 +18,14 @@
 #      the credentials, which arrive only as files of the operator's Secret,
 #      each container receiving its own keys, labels, selectors, names and
 #      namespaces, images, probes, the settings and their checksum, the
-#      ingestion CronJobs, the demonstration and the attached pod, that no
-#      roster reaches the chart, the NetworkPolicies and the Ingress, and
+#      schema upgrade's Job in each mode and its order, the ingestion
+#      CronJobs, the demonstration and the attached pod, that no roster
+#      reaches the chart, the NetworkPolicies and the Ingress, and
 #      NOTES.txt. They also give the chart values it has to refuse and check
-#      each message.
+#      each message, and package the chart with helm package as release.sh
+#      does: the package is the same, byte for byte, whatever the files'
+#      times, holds every file of the chart and its licence, has no link or
+#      reference that leaves it, and lints and renders from the file.
 #
 # Every helm call runs with a cleared environment. HOME, TMPDIR, helm's
 # configuration, cache and data directories and DOCKER_CONFIG lie in a new
@@ -56,8 +60,9 @@ Checks the Helm chart in charts/pubdex/ offline, with the pinned helm:
 helm lint --strict with its own values, the values files of the checks and
 the examples, for the oldest and the newest supported Kubernetes release;
 then the tests in charts/tests/, which render the chart and check the
-manifests and the values it refuses. Needs .venv (./setup_venv.sh) and the
-pinned helm (./setup_cluster_tools.sh); no cluster, Docker or network.
+manifests and the values it refuses, and package it as release.sh does.
+Needs .venv (./setup_venv.sh) and the pinned helm (./setup_cluster_tools.sh);
+no cluster, Docker or network.
 
   -h, --help    show this help
 USAGE

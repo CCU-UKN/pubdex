@@ -7,8 +7,8 @@ working directory:
 
 | Command | What it runs | Needs |
 |---|---|---|
-| [`./run_checks.sh`](../run_checks.sh) | The **default offline check suite**: compilation of `people_pubs` and its tests, the Markdown link and path check, the offline unit and source-fixture tests, and — when a commit range or the staged index is supplied — the transform-version guard. It is the pre-commit hook and the everyday command. Its tests run in a cleared environment (see *Isolation and cleanup*), so they stay offline and complete whatever the caller exports. | `.venv` with `requirements-dev.txt`, in a Git checkout; no database, no Docker, no network |
-| [`./run_ci_suite.sh`](../run_ci_suite.sh) | The **complete verification suite**, the command public CI runs: the nine stages below, in order, stopping at the first failure with that stage's exit status. `--base <sha> [--head <sha>]` adds the transform-version guard over that commit range and the check of the files its commits add or change; an empty or all-zero base (the first push of a branch) gives the guard no range, as in `run_checks.sh`, and makes the secrets check read every commit reachable from the head. | the same `.venv`, a Git checkout (with the complete history for a range), the pinned helm, kubectl and kind that [`../setup_cluster_tools.sh`](../setup_cluster_tools.sh) installs, Linux on x86_64 for stage 9, and a Docker Engine 28.0.1 or later, except 28.2.0 to 28.3.2, with the buildx plugin and the Compose plugin 2.24.0 or later on the same machine — see *Running the suite elsewhere* |
+| [`./run_checks.sh`](../run_checks.sh) | The **default offline check suite**: compilation of `people_pubs` and its tests, the Markdown link and path check, the release-note check of `VERSION`'s section in `CHANGELOG.md` against the tree and the preceding PubDex release in the release record ([`check_release_notes.py`](check_release_notes.py)), the version guard ([`check_version_guard.py`](check_version_guard.py)), which refuses a tree that carries the version of a published PubDex release but ships other files than that release's commit, the offline unit and source-fixture tests, and — when a commit range or the staged index is supplied — the transform-version guard. It is the pre-commit hook and the everyday command. Its tests run in a cleared environment (see *Isolation and cleanup*), so they stay offline and complete whatever the caller exports. | `.venv` with `requirements-dev.txt`, in a Git checkout; no database, no Docker, no network |
+| [`./run_ci_suite.sh`](../run_ci_suite.sh) | The **complete verification suite**, the command public CI runs: the eleven stages below, in order, stopping at the first failure with that stage's exit status. `--base <sha> [--head <sha>]` adds the transform-version guard over that commit range and the check of the files its commits add or change; an empty or all-zero base (the first push of a branch) gives the guard no range, as in `run_checks.sh`, and makes the secrets check read every commit reachable from the head. | the same `.venv`, a Git checkout (with the complete history for a range, and with the commit of the PubDex release `VERSION` names once that release is published), the pinned helm, kubectl and kind that [`../setup_cluster_tools.sh`](../setup_cluster_tools.sh) installs, the pinned SBOM tool that `../release.sh setup` pulls, Linux on x86_64 for stages 9-11, and a Docker Engine 28.0.1 or later, except 28.2.0 to 28.3.2, with the buildx plugin and the Compose plugin 2.24.0 or later on the same machine — see *Running the suite elsewhere* |
 
 The stages of `./run_ci_suite.sh`:
 
@@ -16,13 +16,15 @@ The stages of `./run_ci_suite.sh`:
 |---|---|---|
 | 1 | `./run_checks.sh`, with the range when one is given | everything the offline suite above proves |
 | 2 | [`check_secrets_and_local_config.py`](../check_secrets_and_local_config.py), with the range when one is given | no committed secret or local configuration of a kind its rules recognise in the publishable tree and, given a range, in the files its commits add or change — a pattern check with documented limits, not proof that no secret exists; see *Committed secrets and local configuration* below |
-| 3 | [`DB/run_migration_smoke.sh`](run_migration_smoke.sh) | the schema bootstraps from an empty PostgreSQL database and the runtime patch re-applies cleanly |
-| 4 | [`DB/run_task_1a_demo.sh`](run_task_1a_demo.sh) | the clean-clone acceptance path end to end — bootstrap, synthetic roster, bundled ORCID and Crossref payloads, queries and a verified export — with no metadata-provider request |
-| 5 | [`DB/run_disposable_integration.sh`](run_disposable_integration.sh) | the complete integration suite on its own disposable PostgreSQL, then the publication-view and role tests again after the runtime patch has been re-applied to that database |
-| 6 | [`run_stack_acceptance.sh`](../run_stack_acceptance.sh) | the Compose deployment end to end: the application image built from the checkout, `compose.yaml` started from an empty volume in a project of its own, the synthetic demonstration ingested inside it as `app_writer` and read back over HTTP as `app_readonly`, readiness across a database restart, persistence across recreation, and no password in any output — see *The Compose deployment's acceptance test* |
-| 7 | [`run_operator_acceptance.sh`](../run_operator_acceptance.sh) | the operator's workflow on that deployment, as [`../DEPLOYMENT.md`](../DEPLOYMENT.md) gives it: the stack configured by an `.env` file — project name, image, secrets directory, port, log level — on the ordinary network of `compose.yaml`, a private roster imported on standard input, an ingestion of the bundled payloads, the refresh, the read service and the export, both documented ways of changing the roles' passwords, a dump restored into a new stack, and the documented role model, each checked by the records and connections it leaves — see *The operator's workflow test* |
+| 3 | [`DB/run_migration_smoke.sh`](run_migration_smoke.sh) | the baseline bootstraps from an empty PostgreSQL database, the schema upgrade applies and records every schema change once, a second schema upgrade changes nothing, and the runtime patch re-applies cleanly — see *The schema upgrade's tests* |
+| 4 | [`DB/run_task_1a_demo.sh`](run_task_1a_demo.sh) | the clean-clone acceptance path end to end — bootstrap and schema upgrade, synthetic roster, bundled ORCID and Crossref payloads, queries and a verified export — with no metadata-provider request |
+| 5 | [`DB/run_disposable_integration.sh`](run_disposable_integration.sh) | the complete integration suite on its own disposable PostgreSQL, after the schema upgrade, then the publication-view and role tests again after the runtime patch has been re-applied to that database; an explicit synthetic backup through the actual development restore helper, checking values, the schema record, ownership, schema support and role boundaries |
+| 6 | [`run_stack_acceptance.sh`](../run_stack_acceptance.sh) | the Compose deployment end to end: the application image built from the checkout, `compose.yaml` started from an empty volume in a project of its own, its schema upgrade and the record it leaves, the synthetic demonstration ingested inside it as `app_writer` and read back over HTTP as `app_readonly`, readiness across a database restart, persistence across recreation, and no password in any output — see *The Compose deployment's acceptance test* |
+| 7 | [`run_operator_acceptance.sh`](../run_operator_acceptance.sh) | the operator's workflow on that deployment, as [`../DEPLOYMENT.md`](../DEPLOYMENT.md) gives it: the stack configured by an `.env` file — project name, image, secrets directory, port, log level — on the ordinary network of `compose.yaml`, a private roster imported on standard input, an ingestion of the bundled payloads, the refresh, the read service and the export, both documented ways of changing the roles' passwords, a dump restored into a new stack whose schema upgrade then finds nothing to do, and the documented role model, each checked by the records and connections it leaves — see *The operator's workflow test* |
 | 8 | [`run_chart_checks.sh`](../run_chart_checks.sh) | the Helm chart in `charts/pubdex/`, offline with the pinned helm: it lints under `--strict` for the oldest and newest supported Kubernetes release, renders for each values file of the checks and each example, and passes the assertions on the manifests and the refusal of invalid values — see *The Helm chart's offline checks* |
 | 9 | [`run_cluster_acceptance.sh`](../run_cluster_acceptance.sh) | the Helm chart on two disposable Kubernetes clusters, one after the other, each a kind cluster of its own on a Docker network of its own. On the newest supported release, Kubernetes 1.37: the images built from the checkout loaded into it and the published images pulled into it by digest, and the chart in both modes under Pod Security "restricted". Evaluation mode: a server-side dry run, the install of the published images with the synthetic demonstration, the publication read over HTTP field by field, `helm test`, an upgrade to the images under test with other values and a rollback, each with persistence, no new initialisation and both role logins checked, a password change, the database scaled away and back for readiness, the NetworkPolicy observed, and the uninstall. External mode against a PostgreSQL server of the run's own with TLS: the setup Job as a hook with a non-superuser admin, the demonstration by the notes' commands, an upgrade, a password change, a routine upgrade with the setup switched off and a rollback, both without the admin role's Secret and shown by the API server to have run no setup, and the uninstall. On the oldest, Kubernetes 1.35: evaluation mode's dry run, install, `helm test`, upgrade, rollback and uninstall as a user whose Role grants exactly the rights `KUBERNETES.md` lists, with the kubelet pulling the published images and an audit log showing no refused request — see *The Helm chart on a disposable cluster* |
+| 10 | [`run_release_rehearsal.sh`](../run_release_rehearsal.sh) | the rehearsal of a PubDex release, with nothing published: [`../release.sh`](../release.sh) builds test release A — the checkout as it is, under a version reserved for test releases — with its source archive, chart package, both images, an SBOM of each and the provenance record, and verifies it; a second build gives the same source archive and chart package byte for byte, and SBOMs and a provenance record that differ only in the build's times, image ids and config digests; the chart lints for the oldest and newest supported Kubernetes release and renders the test release's images from its package file; the run holds no registry credential — see *The rehearsal of a PubDex release* |
+| 11 | [`run_upgrade_acceptance.sh`](../run_upgrade_acceptance.sh) | the upgrades between PubDex releases on the Compose deployment, with an operator's commands: `release.sh` builds test release A of the checkout and test releases B1 and B2 with the test-only overlay; A is upgraded to B1 — a backward-compatible schema change and a new transform version — and rolled back by swapping the images, then upgraded to B2 — a schema change that is not backward compatible — which A refuses, and rolled back by restoring the backup taken before the upgrade; the published preceding release, and the upgrade floor once it is another, is upgraded to A and rolled back by swapping the images — see *Upgrades between PubDex releases on Compose* |
 
 Public CI ([`.github/workflows/db-tests.yml`](../.github/workflows/db-tests.yml))
 checks the repository out with its history, creates `.venv` with
@@ -32,12 +34,27 @@ hash, and installs pip with [`install_pip.py`](install_pip.py) and the
 development lock with [`install_locked.py`](install_locked.py) from those
 files alone, psycopg's C implementation built against the runner's libpq —
 installs the pinned helm, kubectl and kind under `.tools/` with
-[`../setup_cluster_tools.sh`](../setup_cluster_tools.sh), and calls
+[`../setup_cluster_tools.sh`](../setup_cluster_tools.sh), pulls the pinned
+SBOM tool with `../release.sh setup`, and calls
 `./run_ci_suite.sh --base <event base> --head <event
 commit>`. No test, rule, database step or assertion lives in the workflow, so
 a green local run and a green CI run mean the same thing, and a runner on
-another forge reproduces the result with the same three steps, provided it
-meets the contract in *Running the suite elsewhere* below. Every run starts by
+another forge reproduces the result with the same four steps, provided it
+meets the contract in *Running the suite elsewhere* below. The job publishes
+nothing: it rehearses a PubDex release in stage 10 and builds test releases
+in stages 9 and 11, none of which leaves the runner; it takes no registry
+credential and no repository secret, its token can only read the
+repository, and no step of it logs in to a registry, pushes anything or runs
+the publish step of `release.sh`, which only the maintainer runs
+([`../RELEASING.md`](../RELEASING.md)). The job's limit is 60 minutes. On
+the machine of the local records the eleven stages took about 23 minutes;
+the first nine, as they stood for task 2b, took about 14 minutes there and
+15 to 18 minutes in their three runs on GitHub's hosted runner, where the
+images are built without a cache, and the job's other steps about one more
+([`../TASK_2B.md`](../TASK_2B.md) records the local runs and two of the
+hosted ones). At those ratios the job is estimated at
+26 to 32 minutes, and the limit is about twice that, because no run of the
+eleven stages on a hosted runner has been measured. Every run starts by
 printing the versions the repository does not pin (system, Bash, Python, pip,
 psycopg's implementation and libpq, Git, Docker Engine, Docker Compose), each
 of stages 3–5 the PostgreSQL image digest and server version it used, stage 6
@@ -176,6 +193,22 @@ it needs and where it differs.
   node's volumes, the network, the image tags it created and its temporary
   directory, and confirms it as stage 6 does. A network named `kind` and
   other clusters are never touched.
+- Stage 10 builds test release A twice into a temporary directory of its
+  own, under a version of its own, which labels its images, and runs every
+  Docker command with a client configuration of its own that holds no
+  registry credential. Its cleanup removes the containers and images with
+  that label, both local tags, the SBOM tool's containers that mount its
+  directory, and the directory, and confirms it as stage 6 does (*The
+  rehearsal of a PubDex release*).
+- Stage 11 builds its three test releases as stage 10 builds one, under
+  versions of the run's own, with the same client configuration, and runs
+  each stack in a Compose project of its own, `pubdex-upgrade-<run>-…`,
+  whose services, volumes and network carry the run label
+  `pubdex.upgrade-acceptance.run`. Its cleanup removes the projects, what
+  carries their names or the run label, the test releases' images and
+  containers, and its temporary directory, and confirms it as stage 6 does;
+  the published images it pulled stay (*Upgrades between PubDex releases on
+  Compose*).
 - An interrupt from the terminal or an external timeout reaches the running
   stage directly, which cleans up at once. A signal sent to `run_ci_suite.sh`
   alone takes effect when the running stage returns, and no later stage
@@ -189,7 +222,7 @@ Each stage is also a command of its own. From `DB/`:
 |---|---|
 | `./run_tests.sh [pytest arguments]` | The offline unit and fixture tests alone, in the same cleared environment. |
 | `../.venv/bin/python ../check_secrets_and_local_config.py [PATH ...]` | The secrets and local-configuration check, over the publishable tree or the files given; with `--base <rev> [--head <rev>]` also over the files the commits of that range add or change; `--list-rules` explains every rule. |
-| `./run_migration_smoke.sh` | Schema bootstrap from an empty database plus re-application of the runtime patch, in a disposable container. |
+| `./run_migration_smoke.sh` | The baseline from an empty database, the schema upgrade twice, and re-application of the runtime patch, in a disposable container. |
 | `./run_task_1a_demo.sh` | The clean-clone acceptance path end to end against a disposable database. |
 | `./run_disposable_integration.sh [pytest arguments]` | The integration suite on a disposable PostgreSQL; arguments such as `-k attribution` narrow the main run. See *Running the integration suite in a disposable container* below. |
 | `PEOPLE_PUBS_INTEGRATION_DSN=... ./run_integration_tests.sh` | The integration tests against a disposable database you started yourself. |
@@ -197,6 +230,9 @@ Each stage is also a command of its own. From `DB/`:
 | `../run_operator_acceptance.sh [--image <reference>]` | The operator's workflow on the Compose deployment, with the image built from the checkout or a given one. See *The operator's workflow test* below. |
 | `../run_chart_checks.sh` | The offline checks of the Helm chart with the pinned helm; from the repository root, `.venv/bin/python -m pytest charts/tests [pytest arguments]` runs their tests alone. See *The Helm chart's offline checks* below. |
 | `../run_cluster_acceptance.sh [--image <reference> --postgres-image <reference> [--expect-version <version>] [--expect-revision <commit>]]` | The Helm chart's lifecycle on a disposable kind cluster, with images built from the checkout or the given ones, which Docker has to have. See *The Helm chart on a disposable cluster* below. |
+| `../run_release_rehearsal.sh` | The rehearsal of a PubDex release: test release A built, verified, built again and compared, and its chart package linted and rendered, with nothing published. See *The rehearsal of a PubDex release* below. |
+| `../run_upgrade_acceptance.sh` | The upgrades and rollbacks between PubDex releases on the Compose deployment: test release A to B1 and to B2, and the published preceding release to A. See *Upgrades between PubDex releases on Compose* below. |
+| `../release.sh build --test <name> [--out <dir>]` | One test release of the checkout as it is, built into `dist/pubdex-<VERSION>-test.<name>/` or the directory given and verified; `../release.sh verify <dir>` checks such a directory again. Needs `../release.sh setup` once. [`../RELEASING.md`](../RELEASING.md) is the procedure of a real PubDex release. |
 
 ### Network access during tests
 
@@ -279,6 +315,18 @@ ingestion is `people_pubs.sync.fixture_demo`, whose sources are the bundled
 payloads, and the other commands — the attribution rule, the refresh, the
 export and a connection check — make no request. Stage 6 is the one that
 proves the demonstration needs no network.
+
+Stages 9 to 11 build test releases with `release.sh`, whose image builds,
+like those of stages 6 and 7, pull the base images by digest and fetch the
+locked files unless Docker has them. The SBOM tool and `release.sh`'s
+probes of the images run in containers without network, and helm contacts
+no cluster but stage 9's own. Stage 11's stacks run on the ordinary network
+of `compose.yaml`, as stage 7's does, and keep away from the metadata
+providers by their commands alone: the only ingestion is the
+demonstration's, of the bundled payloads. Stage 11 pulls the published
+images of the preceding PubDex release, and of the floor, by digest when
+Docker lacks them, without credentials; stage 9's nodes pull them
+themselves (*The Helm chart on a disposable cluster*).
 
 The tests of the guard itself
 ([`tests/test_network_guard.py`](tests/test_network_guard.py) and
@@ -605,17 +653,19 @@ each has the tests listed above:
   receiving special treatment and no silent fallback to lexical order.
 - Golden fixtures live under `tests/fixtures/golden/` and are intentionally tiny, synthetic examples for manual CSV, Crossref, ORCID, OpenAlex, DataCite, DBLP and Semantic Scholar payload shapes, plus a safe demo roster and the export and source-coverage golden files.
 - Offline fixture-backed ingestion tests (`tests/test_orcid_fixture_ingest.py`, `tests/test_crossref_fixture_ingest.py`) lock down ORCID work-summary/contributor extraction and Crossref DOI/date/preprint/author parsing so plain CI never depends on live API availability; `tests/test_roster_and_export.py` does the same for `add_people` roster validation, its roster input from a file or from standard input (`--csv -`: UTF-8 with a byte-order mark and CRLF line ends read like a file, the delimiter, an empty roster, one without an `orcid` column or header, Latin-1 and UTF-16 input refused before any database connection, an unreadable line stopping the run with its number and nothing committed, a terminal refused, a missing, unreadable or directory path, the conflict with `--orcid`, and messages that number rejected rows and never quote a name or address), and the deterministic publication CSV export.
-- `./run_migration_smoke.sh` (needs Docker) proves the schema bootstraps from an empty database and that `init/010_ingestion_runtime_schema.sql` re-applies cleanly, with the login roles' `USAGE` — never `CREATE` — on the schema holding the extensions in place after each step. A last re-application runs after the `maintenance` role has been removed from the run's own cluster, as for a database restored into a cluster without it: the patch, which grants that role `USAGE` only where it exists, has to succeed there and must not create the role. It uses a uniquely named, labelled container and volume with no host port and removes only those two, so it can run next to other instances and in parallel. It is stage 3 of `../run_ci_suite.sh`; run it on its own whenever `DB/init/` changes.
+- `./run_migration_smoke.sh` (needs Docker and `.venv`) proves the baseline bootstraps from an empty database without a record of schema changes, that the schema upgrade then applies and records every schema change of `schema/` and a second schema upgrade changes nothing (*The schema upgrade's tests*), and that `init/010_ingestion_runtime_schema.sql` re-applies cleanly and leaves the record as it was, with the login roles' `USAGE` — never `CREATE` — on the schema holding the extensions in place after each step. A last re-application runs after the `maintenance` role has been removed from the run's own cluster, as for a database restored into a cluster without it: the patch, which grants that role `USAGE` only where it exists, has to succeed there and must not create the role. It uses a uniquely named, labelled container and volume, published on a loopback port Docker picks for the schema upgrade, and removes only those two and its private temporary directory, so it can run next to other instances and in parallel. It is stage 3 of `../run_ci_suite.sh`; run it on its own whenever `schema/` or `people_pubs/schema.py` changes.
 - `./run_task_1a_demo.sh` (needs Docker) runs the clean-clone acceptance path end to end against its own disposable database: bootstrap, synthetic roster, the bundled ORCID payload, Crossref enrichment of the same work, a stored-record query, a canonical-list query and an export whose contents it verifies. It contacts no metadata provider, never uses Docker Compose, and removes only the container and volume it created. `tests/test_fixture_demo.py` pins the offline half (the fixture sources open no socket; the payloads still parse into the expected publication, provenance and authorship shapes) and `tests/integration/test_fixture_demo_integration.py` the database half. It is stage 4 of `../run_ci_suite.sh`.
 - `tests/test_migration_smoke_script.py` runs that script offline against a stub `docker` and pins its resource handling: unique names, cleanup registered before creation, no pre-delete, removal of exactly what it created after success, a failed start, a bounded bootstrap timeout, a container exit or an interrupt, and an abort on a name collision. For the migration smoke and the acceptance demonstration alike — the demonstration runs from a scratch checkout whose interpreter records every Python step instead of connecting anywhere — it also proves that a second interrupt arriving while the container is being removed does not cut the cleanup short; that a cleanup which fails — a removal Docker refuses, one that reports success but leaves the resource, a daemon that no longer answers, or (for the demonstration) a temporary directory that cannot be removed — is reported with the commands that find the leftovers and fails an otherwise successful run, while a failed start or a signal keeps its own exit status; and that the superuser password is random per run, independent of the run id, handed to Docker by name so that no `docker` argument holds it, absent from the output, and replaced by `<password>` in a container log tail that contained it. From the recorded steps of a whole demonstration run it also proves: no step takes `--dsn`, no Python, `docker` or `env` command line holds the password, and each step's environment holds exactly the isolated settings — the database bound through `PEOPLE_DB_DSN` and `PG*`, and `PEOPLE_PUBS_SKIP_DOTENV=1` — with nothing inherited from a polluted caller. For both it proves that a container which finished initialising without running `init/` — an empty mount, as when the Docker daemon cannot see the checkout — stops the run at once with that diagnosis, and that `DISPOSABLE_PG_IMAGE` sets the image while each script's own variable takes precedence and the run reports the image it used.
 - `tests/test_disposable_integration_script.py` does the same for `./run_disposable_integration.sh`, against a stub `docker` and a stub test command: unique owned resources, no pre-delete, a loopback-only port Docker picks, `init/` mounted read-only, the password kept off every command line — Docker's, the test command's and any `env` launcher's — and masked in the test output, in the container diagnostics and in the error output of a failed re-application, a test environment cleared of inherited variables and exported shell functions in which every DSN and `PG*` setting names the disposable database, `PEOPLE_PUBS_SKIP_DOTENV=1` is set and no `PYTEST_ADDOPTS` survives, the suite, the runtime-patch re-application and the rerun of the view and role tests in that order, the tests' own exit status preserved, a skipped or empty run treated as a failure, a bounded readiness wait, an immediate stop on an exited container, a failed init script or an init directory the daemon could not see, the image variables, a refused non-loopback port, an abort on a name collision, and removal of exactly what it created — including its private temporary directory — after success, failure, SIGINT, SIGTERM, SIGHUP, an external timeout or a second interrupt during the cleanup. A cleanup that fails in any of the ways above, or a temporary directory that cannot be removed, is reported and fails an otherwise successful run, while a test failure or a signal keeps its own exit status.
 - `tests/test_network_guard.py` proves the guard offline: a connection to an external address, a host-name lookup of a provider (also through a direct `connect()`, which would otherwise resolve the name first), a request through the package's own DataCite client, a loopback connection, a datagram, a connection through the lower-level `_socket` class and psycopg connections to loopback, remote or default-socket servers are all refused at once; Unix-domain sockets keep working; the integration policy admits its one database and nothing else; a child Python process is refused too, and a refusal it swallows is still recorded; and a test that swallows a refusal fails. In child processes it also proves, against synthetic loopback listeners that count what reaches them, that psycopg connections through `psycopg.connect`, `Connection.connect` and `AsyncConnection.connect` are refused before the server is contacted under the offline policy, and reach the allowed server — and only that one — under a database policy; that a child loads psycopg only when it imports it and starts normally without it; that a database refusal a grandchild swallows fails the enclosing test run; that a test run started by a test, which holds a second copy of the guard, imports psycopg wrapped by both copies; and that a guard which cannot be set up, or a psycopg it cannot wrap, stops the child or fails its import and is recorded. `tests/integration/test_network_guard_integration.py` proves on the disposable database that psycopg, `people_pubs.db.connection`, a plain socket and a child process — over a socket and through psycopg, synchronous and asynchronous — reach it, while another port, another host or a provider is refused.
 - `tests/test_expected_skips.py` pins each rule of the skip policy on the tests it names and the condition it states, with unrelated tests, other tests of the same module and false conditions (not root, `timeout(1)` present, a database configured) as counterparts, and that every test it names exists. Through whole test runs that load `tests/conftest.py` as a plugin it proves that expected skips keep a run green; that a module skipped while it is collected — by `pytest.skip(..., allow_module_level=True)`, `pytest.importorskip` or `unittest.SkipTest` — fails a run whose other test passes, which plain pytest would let pass; that unrelated tests and false conditions cannot use an exception; that an integration skip with a database configured, or outside `tests/integration/`, and an expected failure fail the run; and that pytest's own failure statuses stay as they are.
-- `tests/test_ci_suite_script.py` runs `../run_ci_suite.sh` offline, with every stage replaced by a recording stub: the nine stages in order from any working directory, the first failure stopping the run with its own status, `--base`/`--head` reaching the offline stage and the secrets check unchanged and no other stage (the all-zero and empty first-push bases included), the environment report with the Engine and Compose versions, usage errors, the diagnostics for a missing interpreter, missing requirements, a missing pinned helm (with `./setup_cluster_tools.sh` as the command), missing Git or Docker, an unreachable daemon, a Docker Engine older than 28.0.1 (25.0.5, Debian 13's 26.1.5, 27.5.1 and 28.0.0 among them), one of 28.2.0 to 28.3.2 or of no recognisable version — with no stage run — while 28.0.1, 28.0.4, 28.3.3 and 29.9.2 are accepted, and a Compose plugin that is missing, older than 2.24.0 — 2.20.1, which rejects the `start_interval` of `compose.yaml`, 2.20.2 and 2.23.3, which leave it out of the containers, and a 2.24.0 pre-release included — or of no recognisable version, while 2.24.0, a `v` prefix, a distribution's build suffix, a later pre-release and Compose 5 are accepted, and what a terminal interrupt, an external timeout or a signal to the suite alone does. The message for a missing `.venv` — of this suite, `run_checks.sh`, `DB/run_task_1a_demo.sh` and `DB/run_disposable_integration.sh` — and for an existing one that lacks packages gives `./setup_venv.sh` and no other command; `setup_venv.sh` itself, run with recording interpreters, creates `.venv` without pip, fetches the files of the pip, build and development locks with `fetch_verified.py` into a temporary directory, installs pip with `install_pip.py` and the development lock with `install_locked.py` from that directory, runs `pip check` and removes the directory, passing `--python`, `--psycopg` and `--network-isolation` on, and refuses an existing `.venv` and unknown choices; and every setup in `README.md`, `QUICKSTART.md`, `DB/README.md`, this page, both workflows and those scripts gives `setup_venv.sh`, and none creates a `.venv`, runs pip to install anything or calls the fetch or install scripts itself. It also pins the public CI workflow as a thin adapter that only calls `setup_venv.sh`, `setup_cluster_tools.sh` and the suite, never helm or kubectl itself, with its actions pinned by commit and its runner image, Python version fixed; it runs the shell steps of the GitHub and the Forgejo workflow under Bash, with their expressions evaluated against synthetic event contexts of each forge for a push, the first push of a branch and a pull request, proving that they call `./setup_venv.sh` with the workflow's interpreter, then `./setup_cluster_tools.sh`, and hand the suite the range each forge's pull request needs — the target branch's tip on GitHub, which tests a merge commit, and the merge base on Forgejo, which tests the head commit, also when the target branch has moved on; it pins the Forgejo workflow to the documented host label, to actions from Forgejo's mirror by absolute URL and commit, and to the same checkout commit and setup as the GitHub workflow; and it runs the script lines of the GitLab CI example in *Running the suite elsewhere* under Bash, as a shell executor would, with the variables GitLab sets for a push, the first push of a branch and a merge-request pipeline, proving that they call `./setup_venv.sh --python python3.11`, then `./setup_cluster_tools.sh`, and hand the suite the expected range.
+- `tests/test_ci_suite_script.py` runs `../run_ci_suite.sh` offline, with every stage replaced by a recording stub: the eleven stages in order from any working directory, the first failure stopping the run with its own status, `--base`/`--head` reaching the offline stage and the secrets check unchanged and no other stage (the all-zero and empty first-push bases included), the environment report with the Engine and Compose versions, usage errors, the diagnostics for a missing interpreter, missing requirements, a missing pinned helm (with `./setup_cluster_tools.sh` as the command), a missing SBOM tool (with `./release.sh setup` as the command), missing Git or Docker, an unreachable daemon, a Docker Engine older than 28.0.1 (25.0.5, Debian 13's 26.1.5, 27.5.1 and 28.0.0 among them), one of 28.2.0 to 28.3.2 or of no recognisable version — with no stage run — while 28.0.1, 28.0.4, 28.3.3 and 29.9.2 are accepted, and a Compose plugin that is missing, older than 2.24.0 — 2.20.1, which rejects the `start_interval` of `compose.yaml`, 2.20.2 and 2.23.3, which leave it out of the containers, and a 2.24.0 pre-release included — or of no recognisable version, while 2.24.0, a `v` prefix, a distribution's build suffix, a later pre-release and Compose 5 are accepted, and what a terminal interrupt, an external timeout or a signal to the suite alone does. The message for a missing `.venv` — of this suite, `run_checks.sh`, `DB/run_task_1a_demo.sh` and `DB/run_disposable_integration.sh` — and for an existing one that lacks packages gives `./setup_venv.sh` and no other command; `setup_venv.sh` itself, run with recording interpreters, creates `.venv` without pip, fetches the files of the pip, build and development locks with `fetch_verified.py` into a temporary directory, installs pip with `install_pip.py` and the development lock with `install_locked.py` from that directory, runs `pip check` and removes the directory, passing `--python`, `--psycopg` and `--network-isolation` on, and refuses an existing `.venv` and unknown choices; and every setup in `README.md`, `QUICKSTART.md`, `DB/README.md`, this page, both workflows and those scripts gives `setup_venv.sh`, and none creates a `.venv`, runs pip to install anything or calls the fetch or install scripts itself. It also pins the public CI workflow as a thin adapter that only calls `setup_venv.sh`, `setup_cluster_tools.sh`, `release.sh setup` and the suite, never helm, kubectl, a stage or another step of `release.sh` itself, with its actions pinned by commit and its runner image, Python version fixed; it runs the shell steps of the GitHub and the Forgejo workflow under Bash, with their expressions evaluated against synthetic event contexts of each forge for a push, the first push of a branch and a pull request, proving that they call `./setup_venv.sh` with the workflow's interpreter, then `./setup_cluster_tools.sh` and `./release.sh setup`, and hand the suite the range each forge's pull request needs — the target branch's tip on GitHub, which tests a merge commit, and the merge base on Forgejo, which tests the head commit, also when the target branch has moved on; it pins that neither workflow takes a credential or has a step that could publish — the job's commands are those four lines and no other, its only actions the checkout and, on GitHub, the interpreter, the only values it takes from the forge the event's two commits, no secret, token, login, upload or write permission is named, the checkout does not keep the forge's token, and GitHub's permissions are `contents: read` alone; it pins the Forgejo workflow to the documented host label, to actions from Forgejo's mirror by absolute URL and commit, and to the same checkout commit, setup and time limit as the GitHub workflow, the limit this page states; and it runs the script lines of the GitLab CI example in *Running the suite elsewhere* under Bash, as a shell executor would, with the variables GitLab sets for a push, the first push of a branch and a merge-request pipeline, proving that they call `./setup_venv.sh --python python3.11`, then `./setup_cluster_tools.sh` and `./release.sh setup`, and hand the suite the expected range.
 - `tests/test_install_pip.py` runs the real `install_pip.py`, the pip bootstrap of every new `.venv` and of the image, in a virtual environment without pip, against a wheelhouse holding a stand-in for pip's wheel, which records how it is run and the network interfaces it sees and places itself in the site-packages of the Python that runs it: a wheel whose SHA-256 the lock lists, and that runs as the locked pip, installs itself with `python -I` from a copy in a temporary directory of its own (`--no-index`), with `--isolated`, `--require-hashes`, `--only-binary=:all:` and `--no-deps`, in an environment where `PIP_CONFIG_FILE` names `os.devnull` and no other pip variable is set, whatever the caller's environment holds, and the copy is removed; it runs in a network namespace with nothing but loopback where the system permits one, and otherwise says so — with `--network-isolation required` it then runs nothing; success is reported only when the environment's Python then imports pip of the locked version, by module and by metadata, from its own site-packages — not from another directory, also not one a path file adds; a corrupted wheel, a missing one, a link in its place, a file the lock lists that is no wheel, and a wheel that reports another pip version are never run as an installer; a failed installation is reported; a lock that is not exactly one `pip==` requirement with hashes is refused before anything else; and the script needs nothing outside the standard library. The real pip runs too: a wheel of the pip installed with the tests, rebuilt from its files after each is checked against its `RECORD`, installs itself into the virtual environment under an `[install] target` from each place pip reads configuration — `PIP_CONFIG_FILE`, `PIP_*` variables, and the global, site and user files, all temporary, after pip itself has shown that it follows them.
 - `tests/test_fetch_verified.py` tests `fetch_verified.py`, the one downloader of every setup and image build. Downloads over `https:` run in the test process through urllib's own handlers, with only `http.client`'s connections replaced by a transport that answers from a table and records each connection before anything is sent: a redirect from `https:` to `http:`, to `http:` and back to `https:`, or to `ftp:` is refused before that destination is contacted, and a redirect or a link from an `https:` page to a local file or to plain HTTP is refused before it is followed; redirects from `https:` to `https:` are followed, with certificate and host-name verification and the timeout; a failed request, a file over its size limit, a page over its limit and a total over its limit leave nothing under the file's name, and so does a file whose SHA-256 the lock does not list or that is not a wheel of its pin. The deadline is tested against real sockets: a server on a Unix-domain socket, which every host name resolves to, stalls while the downloader's own connection code, `http.client` and urllib run against it, with a timeout per operation far longer than the deadline. A body of which one byte arrives every 20 ms is cut off at the deadline while the first buffered read of 64 KiB is still waiting — no chunk reaches the file and nothing is kept — and so are a lookup that does not return, whose thread is shown to end once the resolver returns, its late answer dropped, a real TLS handshake with a peer that never answers, and response headers that trickle in after a redirect, the deadline counted from the first request; the server sees each connection shut down, a download within its deadline is kept, and no thread or descriptor of the downloader's is left. Whole runs against a local index of synthetic wheels take exactly one file per pin — a pure-Python wheel or one for the target CPython on a glibc no newer than the target's, a source archive only where `--allow-source` names the project — and refuse a pin with none, with two, or with a yanked one, locks that disagree or carry options, markers or URLs, and a wheelhouse directory that is not empty; the target's tag rules are tested one by one; and stand-in sockets show that the connection attempts interleave IPv6 and IPv4 and start every quarter of a second, so that an address that does not answer does not cost the timeout.
 - `tests/test_install_locked.py` runs the real `install_locked.py` in a virtual environment without pip, into which `install_pip.py` installs a wheel of the pip installed with the tests, with synthetic locks and wheels: the real pip installs the lock from the wheelhouse alone, without network where a namespace is possible, and whatever pip's configuration files and variables say about indexes, extra file locations, hash checking or the destination; `--network-isolation required` without a namespace installs nothing; and a wheelhouse with a file missing, an extra, changed or linked one, a source archive where a wheel is locked, two files for one pin or another version stops the run before pip. The C build runs on a synthetic psycopg-c source archive whose build backend records the directory it runs in, the `PATH` it sees and the `pg_config` it finds: with the wheelhouse, the three locks, `--pg-config`, `--build-only` and `--built` given relative to the caller's directory, the build finds its inputs although pip and the backend run elsewhere, `PATH` holds no relative entry, the chosen `pg_config` wins over another one on `PATH`, and the build environment's pip is the one `--pip-lock` fixes; a `--pg-config` that is not the `pg_config` the build finds first is refused. Unit tests pin the requirements each psycopg implementation installs — psycopg-c by the hash of its build, or not at all — the record of a built psycopg-c wheel, which has to describe the verified archive and the wheel beside it, the build's environment without `PYTHON*` variables, the caller's `HOME` or pip's settings, the final check, which refuses another implementation than the one asked for, a libpq older than 16 and an installed psycopg-binary, and the detection of an `unshare` that does not isolate.
-- `tests/test_offline_isolation.py` runs the real `./run_tests.sh`, `../run_checks.sh` and `../run_ci_suite.sh` from a scratch checkout whose interpreter only records how it was called, with test DSNs, `PEOPLE_DB_DSN`, `PG*` and `POSTGRES_*` settings, `PYTEST_ADDOPTS`, `PYTEST_PLUGINS`, `PYTHONPATH` and `PEOPLE_PUBS_SKIP_DOTENV=0` exported: standalone and as stage 1 of the complete suite, pytest starts with none of them, with `PEOPLE_PUBS_SKIP_DOTENV=1` and no narrowing argument, while a commit range still reaches the transform-version guard and an all-zero base still counts as no range. `tests/test_config_dotenv.py` pins the opt-out itself on a `.env` file in a temporary directory: without it the file fills only missing values, with it nothing is read, also at import time.
+- `tests/test_offline_isolation.py` runs the real `./run_tests.sh`, `../run_checks.sh` and `../run_ci_suite.sh` from a scratch checkout whose interpreter only records how it was called, with test DSNs, `PEOPLE_DB_DSN`, `PG*` and `POSTGRES_*` settings, `PYTEST_ADDOPTS`, `PYTEST_PLUGINS`, `PYTHONPATH` and `PEOPLE_PUBS_SKIP_DOTENV=0` exported: standalone and as stage 1 of the complete suite, pytest starts with none of them, with `PEOPLE_PUBS_SKIP_DOTENV=1` and no narrowing argument, while a commit range still reaches the transform-version guard and an all-zero base still counts as no range; `run_checks.sh` runs the release-note check, with `PEOPLE_PUBS_SKIP_DOTENV=1`, and the version guard after the Markdown check and before the tests.
+- `tests/test_release_notes.py` runs `check_release_notes.py` on the checkout, which passes, and on fixture trees, each a repository root of its own with `VERSION`, a release record, `DB/schema/`, a transform version and `CHANGELOG.md`, in which one rule is broken: a missing section, two sections of one version, each missing heading, headings out of order or after another subsection; a new schema change that *Schema changes* does not name as a code span in a list item of its own, or names without saying "backward compatible" or "not backward compatible" as its file declares; a named schema change that does not exist or has another name; text other than "None." when no schema change is new; a schema change of the preceding PubDex release missing from `DB/schema/` or edited; *Ingestion changes* "None." with a new transform version, text without the new transform version, or text with an unchanged one; *Upgrade and rollback* without the floor or the preceding PubDex release, without saying that a raised floor was raised, or without saying that the rollback is a restore when a new schema change is not backward compatible; a test release's version in `VERSION`; a patch release with a new schema change or a new transform version. Each fails with status 1 and a message naming what is wrong, and trees that follow every rule pass: a minor release with a backward-compatible schema change, a patch release that changes nothing, and a minor release with a schema change that is not backward compatible and a raised floor.
+- `tests/test_version_guard.py` checks what `check_version_guard.py` counts as shipped on the checkout: every file the Dockerfiles copy from the build context and every file each allowlist rule matches, found independently with `pathlib`'s glob, is shipped, and so are both Dockerfiles, both allowlists, `build_image.sh`, `lib/release_identity.sh` and `charts/pubdex/`; the release record, documents, tests and the suite's scripts are not. Patterns are read as Docker reads them, and an allowlist rule the guard cannot read stops it. On fixture trees with a fake Git, a `VERSION` that names no published PubDex release passes without Git, the record commit of a published one passes, and a changed or untracked shipped file fails and is listed; a missing commit, a directory that is no checkout and a failing comparison stop the guard with a message. The command line runs with a stub `git` on `PATH` and without `git`. `tests/test_config_dotenv.py` pins the opt-out itself on a `.env` file in a temporary directory: without it the file fills only missing values, with it nothing is read, also at import time.
 - `tests/test_secrets_and_local_config.py` pins `../check_secrets_and_local_config.py`: each rule on synthetic positives assembled at run time; literal values that merely contain a `$` or start with a bracket, single-quoted shell text and URL passwords that are only partly references; Python constants at module level, in a class, annotated, as attributes or as bytes; Python literals passed as keyword arguments (also over several lines), stored as dictionary entries, written as literal-only f-strings, concatenations, `or` operands, conditional branches, parameter defaults, subscript targets, tuple unpacking or `:=` targets, assigned inside one-line `if`, `class`, `def` and `for` statements or after a semicolon, and given as the fallback of an environment or mapping lookup — each against a safe counterpart that obtains its value elsewhere; the literal fallbacks and alternate values of shell references (`${NAME:-value}`, `${NAME:=value}`, `${NAME-value}`, `${NAME:+value}`, nested) in scripts, env files, Compose files and URL passwords, next to empty, placeholder, command, reference, error-message and pattern-removal forms that stay accepted; runtime compositions such as `smoke-$RUN_ID` reported in Python strings, env files, YAML and JSON, where nothing expands them, while Python's whole-value placeholders stay accepted; the documented placeholders and the runtime compositions of shell code; the false-positive boundaries (Python expressions, comments, composed f-strings and docstrings, names that merely contain a secret word, URLs without a password, relative paths, DOIs and version numbers); the report format that never shows a matched value, deterministic output, the exit statuses, and that the candidate set comes from the publishable file list, with ignored and deleted files never read. For a commit range it runs the checker against a stub `git` that answers from a synthetic commit graph in Git's own output formats: a credential committed and removed again, or replaced by a placeholder, is reported in the commit that added it although the tree is clean; clean commits pass and are counted; commits the base contains are not read again; a path or link a commit adds is checked like a file; a merge is checked for what it changes itself, and nothing is reported twice; without a base, or with one the clone lacks, every reachable commit is read; a shallow clone, a missing object, an unknown head, a failing `git` and unreadable output each end the check with status 2, never with a pass, while tree findings are still reported; and an accepted finding covers its published commit alone. A last test reads this checkout's own `HEAD` with the real `git`, read-only, to prove that the parsers read what Git prints. It also proves that the checker and its own test corpus hold no finding.
 - `tests/test_attribution_rules_cli.py` pins the command semantics of `people_pubs.sync.attribution_rules` offline: incompatible command/option combinations are rejected before a connection is opened, `--dry-run` never commits or refreshes, `recompute` never changes rules, `list` is read-only, and `--refresh-only` belongs to `recompute` alone.
 - `tests/test_operator_bundles.py` runs `RunAllDayly.sh` and `RunAllWeekly.sh` against stub runners and proves one failing job does not stop the later ones while the bundle still exits non-zero; it also pins the retained job lists.
@@ -769,12 +819,135 @@ each has the tests listed above:
   refused for a modified working tree, for either image, a bad `VERSION` and
   a failed build stopping it before the next, and that Git is only asked:
   `rev-parse`, `ls-files` and `status` with `--no-optional-locks`, so that
-  nothing under `.git/` is written. `tests/test_container_files.py`
+  nothing under `.git/` is written; a test release's version
+  (`--version <VERSION>-test.<name>`, no other form, and only for the
+  checkout's `VERSION` without a pre-release part) labelling both images and
+  keeping the release version off their tags, and a stated revision
+  (`--revision <commit>-dirty`) accepted only with it and only outside a Git
+  checkout. `tests/test_release_script.py` runs `../release.sh` from a
+  scratch checkout against stub `git`, `docker`, helm and `build_image.sh`,
+  with the real tar, gzip, sha256sum and `DB/release_provenance.py`: usage
+  errors; a missing SBOM tool, one with another image id or one reporting
+  another version refused before anything is built, and setup pulling
+  exactly the pinned reference and checking it; the SBOMs written by the
+  pinned Syft from the saved images, with no network, the calling user and
+  a read-only root file system, and every other container a probe of a
+  release image with no network, an unprivileged user and a read-only root
+  file system; the provenance record written from the build, covered by
+  the checksum file and naming nothing of the machine; a PubDex release
+  refused from a checkout with changes, without its annotated tag
+  `v<version>`, with a lightweight tag or one at another commit, a version
+  reserved for test releases in `VERSION`, a chart of another version and an
+  output directory in the way, each before anything is built; a failed image
+  build leaving no output directory; the artifact names, the checksum file's
+  format and `IMAGES`; a source archive that holds the checkout's files — for
+  a test release also the untracked files Git does not ignore — under
+  `pubdex-<version>/` with owner 0, the commit's time and modes 644 and 755,
+  and is the same, byte for byte, when built again with other file times;
+  a test release with the test-only overlay `b1` or `b2` built from a copy
+  of the checkout, uncommitted and untracked files included, whose source
+  archive holds the overlay's schema changes numbered after the last one
+  and the transform version with its suffix, whose images the copy's
+  `build_image.sh` builds with the revision `<commit>-dirty` and no Git
+  checkout above it, where every path keeps the checkout's mode, while the
+  working tree stays untouched; verify checking such a directory against
+  the same copy and refusing it without the overlay or with the other one,
+  and refusing the overlay for a PubDex release; an overlay that lacks a
+  template, holds no suffix, or finds no schema change to number after
+  stopping before anything is built; and both templates following the
+  rules of a schema change, the backward-compatible one only adding;
+  helm run with a cleared environment, with `SOURCE_DATE_EPOCH` for the
+  package alone; verify refusing a changed file, an extra or unlisted file,
+  an archive that is not the checkout's, a moved tag, another revision, a
+  chart package of another version, a failing lint, a missing SBOM, an SBOM
+  without a locked package, a provenance record that names another base
+  image, and an image that reports another PostgreSQL release; publish refusing a
+  test release, a published or unverified directory, a checkout that is not
+  the tagged commit, a version either repository holds as another image or
+  as one whose digest the verified image does not record, any other answer
+  of the registry but its explicit "manifest unknown", a digest it does not
+  give, and a local tag that names another image, each before any push, then
+  pushing the PostgreSQL image before the application image, writing both
+  digests and stopping after a failed push; a second publish completing an
+  interrupted publication, pushing only what the registry does not hold
+  yet, against a stubbed registry that keeps what a push left; and that
+  build and verify never push, tag for a registry, ask one or log in, and
+  that nothing logs in, pushes the chart or scans for vulnerabilities.
+  `tests/test_release_provenance.py` runs `release_provenance.py` on a
+  fixture checkout, release directory and facts, without Docker or Git:
+  every field of the provenance record from the checkout's files, the
+  directory or the facts — the base images and PostgreSQL's source from the
+  Dockerfiles, the locks and scripts from the stage `build-files` — and
+  nothing of the machine in it; the check passing on what was written and
+  failing, by the field's name, for a record changed in any section, a field
+  added or missing, a checkout, image or file changed since, labels that
+  disagree with the Dockerfiles and client libraries other than the runtime
+  lock's; SBOMs of another format, tool, image or version, or without a
+  locked package, Debian's `libpq5` or PostgreSQL, failing too; and the real
+  Dockerfiles giving the inputs a real build's record names.
+  `tests/test_release_rehearsal_script.py` runs `../run_release_rehearsal.sh`,
+  stage 10, from a scratch checkout against stub `release.sh`, `docker`,
+  helm and `git`, with the real python3, tar, sha256sum and cmp: usage
+  errors; every refusal before anything is built — an unreachable daemon,
+  an Engine or a platform the deployment does not support, no buildx, a
+  missing SBOM tool (with `./release.sh setup` as the command) or one with
+  another image id, a missing pinned helm, one of another hash or one
+  reporting another version, a Docker context with TLS files, a `VERSION`
+  with a pre-release part and no Git checkout — each leaving nothing behind;
+  the steps in order, with one test release version of the run's own for
+  both builds and every output in the run's temporary directory; every
+  Docker command after the first, `release.sh`'s included, with the run's
+  own client configuration, empty or naming only the caller's plugin
+  directory, and without the caller's context or `DOCKER_AUTH_CONFIG`; the comparison failing for a changed byte of the
+  source archive or the chart package, for other files, and for SBOMs, a
+  provenance record or `IMAGES` that differ beyond what a build has to
+  change; a failed build or verify stopping the run; the chart linted for
+  both supported Kubernetes releases and rendered with each example and the
+  test release's images, a failing lint, another image or another chart
+  label failing the run; the cleanup removing every container and image of
+  the run and nothing else, after success, after a failure and after
+  SIGINT, SIGTERM or SIGHUP to the process group, a signal to the script
+  alone taking effect when the build returns, and a cleanup that cannot be
+  confirmed failing with the commands that find what is left; a credential
+  in the run's client configuration failing the run; and that the script
+  never runs `release.sh publish`, `docker push`, `tag` or `login`.
+  `tests/test_upgrade_acceptance_script.py` runs
+  `../run_upgrade_acceptance.sh`, stage 11, from a scratch checkout with the
+  real helpers, release record and deployment files, against a stub
+  `release.sh` and a stub `docker` that keeps an inventory of images,
+  containers, networks and volumes with their labels: usage errors; every
+  missing prerequisite — a `VERSION` with a pre-release part, the pinned
+  helm, an unreachable daemon, an Engine, platform or Compose plugin the
+  deployment does not support, no buildx, a missing SBOM tool, a release
+  record without a floor or naming images without digests — stopping the
+  run before anything exists; the three test releases built under names of
+  the run's own, B1 and B2 with their overlays, into the run's temporary
+  directory; the first stack's deployment files taken out of A's image
+  with the command of `DEPLOYMENT.md`, its `.env` file alone configuring
+  every Compose call in a cleared environment, and the run label on every
+  service, volume and network; every Docker command after the first,
+  `release.sh`'s included, with the run's own client configuration; a
+  project that exists already never touched; a password in Compose's
+  output masked; and the cleanup after a failed build, a failed start, a
+  Compose that leaves resources behind and SIGINT, SIGTERM or SIGHUP,
+  removing exactly what the run created, or naming what is left when it
+  cannot confirm it. It also reads the script for the documented backup,
+  restore and deployment-file commands, for no `publish`, `push`, `tag`,
+  `login` or port 5432, and for `--no-deps` in the two commands that show
+  the application's own check alone.
+  `tests/test_container_files.py`
   pins the Dockerfile, `.dockerignore` and the Compose files: one base image
-  for every stage, by digest; a stage of its own that downloads every file of
+  for every stage that runs anything, by digest; the three locks and the four
+  scripts that fetch and install them in a stage of their own, the only bind
+  mount of the steps that use them, so that no other file of the build
+  context invalidates those steps; a stage of its own that downloads every file of
   the pip, build and runtime locks with `fetch_verified.py`, and no other
   download and no other installation by pip; a stage that compiles psycopg-c from
   its verified archive with a compiler and libpq's headers, without network;
+  in both Dockerfiles a stage after the compilation that lists the compiling
+  stage's packages, which the image copies to
+  `/usr/share/doc/<pubdex or pubdex-postgres>/build-packages.txt`, where
+  `release.sh` reads it;
   the image's stage with Debian's libpq alone, no compiler, header or build
   tool, `PSYCOPG_IMPL=c`, and its one install step without network — pip by
   `install_pip.py`, the base image's setuptools removed, the runtime lock by
@@ -784,7 +957,7 @@ each has the tests listed above:
   step or command running pip; an allowlist context that holds exactly what
   is copied and the four scripts, which the build mounts and never copies;
   an unprivileged user that owns nothing but the bootstrap volume's empty
-  mount point, COPY without options and one step after it that makes every
+  mount point, COPY without options but that list's and one step after it that makes every
   file 644 and every directory 755, every file of `init/`, both Compose files
   and `create_secrets.sh` in the image; every entry of the four locks at an
   exact version with its hashes, the runtime lock's entries the same in the
@@ -826,13 +999,15 @@ each has the tests listed above:
   the build, with no download from any forge — and a build context of the
   downloader and that notice alone, the notice the only file of the checkout
   the image carries.
-- `tests/test_stack_acceptance_script.py` runs `../run_stack_acceptance.sh` offline, from a scratch checkout with the real `create_secrets.sh` and disposable-database library, against a stub `docker` that keeps an inventory of the containers, networks, volumes and images it creates and logs every call with the environment of each Compose call, and stub `git` and `build_image.sh`. It proves that invalid arguments and missing prerequisites — no daemon, no Compose plugin, Compose older than 2.24.0 (2.20.1, 2.20.2, 2.23.3 and a 2.24.0 pre-release among them) or of no recognisable version, an Engine older than 28.0.1 (27.5.1, 25.0.5 and 28.0.0 among them), one of 28.2.0 to 28.3.2 or of no recognisable version, for a build or a given image alike — stop the run before anything exists, with what to install, while 28.0.1, 28.0.4, 28.3.3 and 29.9.2 go on to start the stack; that a project that exists already is never touched, not even by the cleanup; that a given image is never built, replaced or removed, is pulled by its exact reference with `--pull`, and is refused for a digest, version or revision other than the one asked for, and for a version or revision label that is missing, `unknown`, malformed or a `-dirty` build of the required commit, before anything starts; that identity options that cannot be checked — a version or abbreviated commit id that is not one, `--release` without `--image`, `--expect-version` or `--expect-revision`, with a `-dirty` revision, a tag naming another version or `--pull` without a digest — are usage errors that ask nothing of Docker or Git; that `--release` starts the `compose.yaml` the image carries, whatever the checkout holds and with no Git at all, by digest after a pull and before the push, and stops before the start when that file names another version or no default image; that an image carrying no `compose.yaml` is refused before the start; that the image's files are checked as user 10001, in a container without network, from a program on standard input, and an image whose files are not root's with modes 755 and 644 is refused before the start; that the image's Python packages are then read the same way with `importlib.metadata` and no pip, by the program the script sends, which the stub runs on a synthetic image's file system with a Python of its own that holds no pip and none of the host's packages: the runtime lock's packages at their versions pass and are named with the base image's others, while a package that is missing or at another version, a lock that pins nothing, an importable pip, and a file named as pip, its scripts, its distribution or a wheel each stop the run before the start with the package or path named, and files whose names only resemble those, or that are under `/proc`, `/sys` and `/dev`, are not reported; that a development run starts this checkout's `compose.yaml` and says when the image carries another, a local `<commit>-dirty` build included; that a build carrying another `compose.yaml` than the checkout's is refused; that Git, asked only for a build, is only asked — `rev-parse`, `ls-files` and `status` with `--no-optional-locks` — and runs with none of the caller's `GIT_*` settings; that a build is this checkout's under a tag of the run, labelled with the commit (`-dirty` for a modified tree, or one with an ignored Python module of the package) and the checkout's `VERSION`, and that tag removed afterwards; that every Compose call names the run's project, a project directory of the run's own holding `compose.yaml` alone, both Compose files and the environment file, with an environment of `PATH`, `HOME` and the daemon selection only, whatever the caller exports — `COMPOSE_*`, `PEOPLE_PUBS_*`, `PG*` and an exported shell function standing in for `docker` included — and that the build runs in the same cleared environment; that the run's settings file holds exactly the documented keys, a loopback address and a port Docker picks; that no password is on a command line, in a Compose call's environment or in the output unmasked; that a rendered configuration holding a password, or naming another project, stops the run before the start; and that a failure after the start, a `docker compose down` that fails, a signal (SIGINT, SIGTERM, SIGHUP), a second interrupt during the cleanup, and a cleanup that cannot be confirmed — resources, the image tag, the temporary directory — each end the run with the right status, report what is left with the commands that find it, and otherwise leave nothing. It also runs the shared `foreign_mounts` check against a stub that lists mounts, a bind's empty name included, and expects exactly the binds and volumes that are not the project's volumes or its secret files. The PostgreSQL image is checked as the application image is: built with it under a tag of the run and removed with it, given with `--postgres-image` or else the one the started `compose.yaml` names, never built or pulled in place of a missing one, refused when its revision is another commit's or a `-dirty` build of the required one, when it carries no `pubdex.postgresql-version` label — the official image, for one — or when the rendered configuration would start another; `--release` with `--pull` needs its digest too, and its version tag has to be the release's. That SQL/XML is unavailable in the running server is checked against real Docker. The successful path runs against real Docker as stage 6; `tests/test_container_files.py` pins that the acceptance addition to `compose.yaml` changes nothing but labels and the internal network.
-- `tests/test_operator_acceptance_script.py` runs `../run_operator_acceptance.sh` offline, from a scratch checkout with the real `create_secrets.sh`, `compose.yaml`, `init/` and helper libraries, against a stub `docker` that keeps an inventory of the containers, networks and volumes it creates, logs every call with the environment and working directory of each Compose call, and — as Compose does — takes the project's name, image, port and secrets directory from the `.env` file of that working directory. It proves that invalid arguments and missing prerequisites stop the run before anything exists; that a project of its name that exists already is never touched; that a given image Docker lacks is never built or pulled; that the operator's directory holds exactly the checkout's deployment files, byte for byte and mode for mode, and the `.env` file, which names the run's project, its image tag, a relative secrets directory outside the directory — where `create_secrets.sh` writes the files — a port of its own and the log level; that every Compose call runs in that directory with no option naming the project, files or settings and an environment of `PATH`, `HOME` and the daemon selection only, whatever the caller exports or the checkout's own `.env`, `compose.override.yaml` and `secrets/` hold; that no password is on a command line, in a Compose call's environment or in the output unmasked; that a rendered configuration holding a password, or naming another project, stops the run before the start; and that a failure after the start, a `docker compose down` that fails, a failed build, a signal (SIGINT, SIGTERM, SIGHUP), a second interrupt during the cleanup and a cleanup that cannot be confirmed each end the run with the right status, report what is left, and otherwise leave nothing — the operator's directory, the secret files and the roster included. The steps after the start run against real Docker as stage 7; offline, one more test holds the `docker compose` commands and the verification query of `../DEPLOYMENT.md`, *Backup and restore*, to those step 8 runs, so that the documented procedure and the tested one cannot drift apart.
+- `tests/test_stack_acceptance_script.py` runs `../run_stack_acceptance.sh` offline, from a scratch checkout with the real `create_secrets.sh` and disposable-database library, against a stub `docker` that keeps an inventory of the containers, networks, volumes and images it creates and logs every call with the environment of each Compose call, and stub `git` and `build_image.sh`. It proves that invalid arguments and missing prerequisites — no daemon, no Compose plugin, Compose older than 2.24.0 (2.20.1, 2.20.2, 2.23.3 and a 2.24.0 pre-release among them) or of no recognisable version, an Engine older than 28.0.1 (27.5.1, 25.0.5 and 28.0.0 among them), one of 28.2.0 to 28.3.2 or of no recognisable version, for a build or a given image alike — stop the run before anything exists, with what to install, while 28.0.1, 28.0.4, 28.3.3 and 29.9.2 go on to start the stack; that a project that exists already is never touched, not even by the cleanup; that a given image is never built, replaced or removed, is pulled by its exact reference with `--pull`, and is refused for a digest, version or revision other than the one asked for, and for a version or revision label that is missing, `unknown`, malformed or a `-dirty` build of the required commit, before anything starts; that identity options that cannot be checked — a version or abbreviated commit id that is not one, `--release` without `--image`, `--expect-version` or `--expect-revision`, with a `-dirty` revision, a tag naming another version or `--pull` without a digest — are usage errors that ask nothing of Docker or Git; that `--release` starts the `compose.yaml` the image carries, whatever the checkout holds and with no Git at all, by digest after a pull and before the push, and stops before the start when that file names another version, no default image or no `schema-upgrade` service; that an image carrying no `compose.yaml` is refused before the start; that the image's schema changes are listed as user 10001 in a container without network, that an image without any is refused before the start, and a build carrying other ones than the checkout's `DB/schema/`; that the image's files are checked as user 10001, in a container without network, from a program on standard input, and an image whose files are not root's with modes 755 and 644 is refused before the start; that the image's Python packages are then read the same way with `importlib.metadata` and no pip, by the program the script sends, which the stub runs on a synthetic image's file system with a Python of its own that holds no pip and none of the host's packages: the runtime lock's packages at their versions pass and are named with the base image's others, while a package that is missing or at another version, a lock that pins nothing, an importable pip, and a file named as pip, its scripts, its distribution or a wheel each stop the run before the start with the package or path named, and files whose names only resemble those, or that are under `/proc`, `/sys` and `/dev`, are not reported; that a development run starts this checkout's `compose.yaml` and says when the image carries another, a local `<commit>-dirty` build included; that a build carrying another `compose.yaml` than the checkout's is refused; that Git, asked only for a build, is only asked — `rev-parse`, `ls-files` and `status` with `--no-optional-locks` — and runs with none of the caller's `GIT_*` settings; that a build is this checkout's under a tag of the run, labelled with the commit (`-dirty` for a modified tree, or one with an ignored Python module of the package) and the checkout's `VERSION`, and that tag removed afterwards; that every Compose call names the run's project, a project directory of the run's own holding `compose.yaml` alone, both Compose files and the environment file, with an environment of `PATH`, `HOME` and the daemon selection only, whatever the caller exports — `COMPOSE_*`, `PEOPLE_PUBS_*`, `PG*` and an exported shell function standing in for `docker` included — and that the build runs in the same cleared environment; that the run's settings file holds exactly the documented keys, a loopback address and a port Docker picks; that no password is on a command line, in a Compose call's environment or in the output unmasked; that a rendered configuration holding a password, naming another project, giving the read service the superuser's password file or starting it before the schema upgrade has succeeded stops the run before the start; and that a failure after the start, a `docker compose down` that fails, a signal (SIGINT, SIGTERM, SIGHUP), a second interrupt during the cleanup, and a cleanup that cannot be confirmed — resources, the image tag, the temporary directory — each end the run with the right status, report what is left with the commands that find it, and otherwise leave nothing. It also runs the shared `foreign_mounts` check against a stub that lists mounts, a bind's empty name included, and expects exactly the binds and volumes that are not the project's volumes or its secret files. The PostgreSQL image is checked as the application image is: built with it under a tag of the run and removed with it, given with `--postgres-image` or else the one the started `compose.yaml` names, never built or pulled in place of a missing one, refused when its revision is another commit's or a `-dirty` build of the required one, when it carries no `pubdex.postgresql-version` label — the official image, for one — or when the rendered configuration would start another; `--release` with `--pull` needs its digest too, and its version tag has to be the release's. That SQL/XML is unavailable in the running server is checked against real Docker. The successful path runs against real Docker as stage 6; `tests/test_container_files.py` pins that the acceptance addition to `compose.yaml` changes nothing but labels and the internal network.
+- `tests/test_operator_acceptance_script.py` runs `../run_operator_acceptance.sh` offline, from a scratch checkout with the real `create_secrets.sh`, `compose.yaml`, `init/` and helper libraries, against a stub `docker` that keeps an inventory of the containers, networks and volumes it creates, logs every call with the environment and working directory of each Compose call, and — as Compose does — takes the project's name, image, port and secrets directory from the `.env` file of that working directory. It proves that invalid arguments and missing prerequisites stop the run before anything exists; that a project of its name that exists already is never touched; that a given image Docker lacks is never built or pulled; that the operator's directory holds exactly the checkout's deployment files, byte for byte and mode for mode, and the `.env` file, which names the run's project, its image tag, a relative secrets directory outside the directory — where `create_secrets.sh` writes the files — a port of its own and the log level; that every Compose call runs in that directory with no option naming the project, files or settings and an environment of `PATH`, `HOME` and the daemon selection only, whatever the caller exports or the checkout's own `.env`, `compose.override.yaml` and `secrets/` hold; that no password is on a command line, in a Compose call's environment or in the output unmasked; that a rendered configuration holding a password, or naming another project, stops the run before the start; and that a failure after the start, a `docker compose down` that fails, a failed build, a signal (SIGINT, SIGTERM, SIGHUP), a second interrupt during the cleanup and a cleanup that cannot be confirmed each end the run with the right status, report what is left, and otherwise leave nothing — the operator's directory, the secret files and the roster included. The steps after the start run against real Docker as stage 7; offline, one more test holds the `docker compose` commands and the verification query of `../DEPLOYMENT.md`, *Backup and restore*, to those step 8 runs, so that the documented procedure and the tested one cannot drift apart, and two hold that step 8 checks the schema upgrade after the restore and that the login check starts no schema upgrade.
 - `tests/test_docker_versions.py` sources `lib/docker_versions.sh`, which `../run_ci_suite.sh`, `../run_stack_acceptance.sh` and `../run_operator_acceptance.sh` use for their version checks, and pins how it compares the versions Docker and Compose report with the minimums: 2.24.0, the first Compose release that passes the health checks' `start_interval` to the container, a `v` prefix, a distribution's build metadata, later pre-releases and later major versions (Compose 5) accepted; 2.20.1 and older, which reject `start_interval`, 2.20.2 to 2.23.3, which accept it and leave it out, and a 2.24.0 pre-release refused; empty, `dev`, two- or four-part and other unrecognisable versions reported as such; Debian 13's `2.26.1-4` and Ubuntu 24.04's Compose releases accepted; one Engine requirement, to build and to run, 28.0.1 or later except 28.2.0 to 28.3.2: every release before 28.0.1 refused, the last of the 25.0 and 27.x lines, 28.0.0, Debian 13's `docker.io` 26.1.5 and Ubuntu 24.04's original 24.0.7 among them, as are 28.2.0 to 28.3.2 and a pre-release of 28.3.3, while 28.0.1, GitHub's runner's 28.0.4, 28.3.3, Debian's testing, Ubuntu 24.04's updated `docker.io` and later releases are accepted; that `compose.yaml` still sets `start_interval`; that the documents stating the Compose minimum all state the same one, and those stating the Engine requirement the same one with its exclusion; and that both acceptance tests report their check of the port bindings as configuration, not as a connection from another host.
 - `tests/test_setup_cluster_tools_script.py` sources `lib/cluster_tools.sh`, the pinned helm, kubectl and kind for the Kubernetes checks, and pins its form — each tool's linux/amd64 download from the address its project documents, SHA-256 and size limit, the one member taken from helm's archive, and the kind node image by digest within kubectl's version skew — and runs `../setup_cluster_tools.sh`, which installs them under `.tools/`, offline from a scratch checkout with a stub `fetch_verified.py` serving synthetic tools and a stub `uname`: it installs exactly the three files and writes nothing else, runs each with a cleared environment to compare its reported version with the pin, checks files already in place by hash instead of downloading them and refuses one that changed, and refuses a missing or malformed pin, a pin from the environment, any platform but Linux on x86_64, a failed or mismatched download, a symbolic link under `.tools/`, a tool reporting another version, and a helm archive whose member is missing, a link, a directory, under another or a duplicate name, too large or of another hash, while no other member is ever written; it also checks that no script names a GitHub address and that `.tools/` is ignored and outside the image's build context.
 - `tests/test_chart_checks_script.py` runs `../run_chart_checks.sh`, stage 8, offline from a scratch checkout in which helm is a recording stub whose SHA-256 the copied pin file carries and `.venv/bin/python` records the pytest call: helm's hash and version checked before it runs anything, and a missing helm, one of another hash or version, a missing `.venv` or missing requirements refused with the command that fixes them; `helm lint --strict` with the chart's own values, every values file of the checks and every example, for Kubernetes 1.35.0 and 1.37.0, then pytest on `charts/tests`; every helm and pytest call with a cleared environment whose home, temporary, helm and Docker configuration directories and kubeconfig path lie in one temporary directory under the caller's `TMPDIR`, no `KUBECONFIG`, `HELM_*` or `PYTEST_ADDOPTS` of the caller's reaching them; nothing written into the checkout, and the temporary directory removed after a pass, a failed lint, which stops the run before the tests, failed tests and a terminal interrupt; and usage errors. It pins the Kubernetes range to the floor of `kubeVersion` in `Chart.yaml` and the release of the pinned kind node image, and shows that stage 1 does not collect the chart tests, and that they fail, never skip, without the pinned helm or with one of another hash.
-- `tests/test_cluster_acceptance_script.py` runs `../run_cluster_acceptance.sh`, stage 9, offline from a scratch checkout in which `docker`, `uname`, `build_image.sh` and the pinned helm, kubectl and kind are recording stubs that keep an inventory of what they were asked to create, the stub `docker` answers `crictl` in the node, and the copied pin file carries the stubs' SHA-256: usage errors; every refused prerequisite — another system or architecture, an unsupported Engine or daemon platform, an old Compose plugin, a missing tool, one of another hash or version, a missing `.venv` or `openssl`, a chart whose default image names no digest — refused before anything is created; revision 1 installed with the chart's default images, which the node pulls by digest without credentials while only the images under test are loaded; a failed pull ending the run with a message that names the registry, before any helm call and with the cleanup confirmed; given images that are the published ones, and images under test with a published image's id, refused; a kubeconfig whose server is another address or another loopback port, that holds a second context, or a control plane published beyond loopback, refused before any kubectl or helm call that could reach a cluster, with the run's cluster, network and tags removed all the same; every kubectl and helm call naming the run's kubeconfig and context, with the run's `HOME`, cache, helm and Docker configuration directories and none of a polluted caller's `KUBECONFIG`, `HELM_*` or `KUBECACHEDIR`, kind running with the run's network and the caller's Docker client configuration, and the caller's `~/.kube/config` untouched; the cleanup deleting the cluster before the network and the network before the image tags, leaving a network named `kind` and another cluster alone, and failing with the commands that find what it could not remove; SIGTERM, SIGINT and SIGHUP during the install ending the run with 143, 130 and 129 after the cleanup; the fallback to an image archive when `kind load docker-image` fails; and given images tagged, never built, their labels checked, and left in place. From the script's text it checks that the step numbers and the header agree; that the floor starts only after the first cluster is gone, that no published image reaches its node before the install, and that its operator's Role grants exactly the access rights `../KUBERNETES.md` lists; and that in external mode only the password change's upgrade has the admin Secret, the routine upgrade alone switches the setup off, the rollback returns to revision 1 and its published images, the routine upgrade, the rollback and the uninstall each show from the API server's replayed watch that they created nothing, while the same replay around the password change's upgrade has to find the setup's Job, ConfigMap and ServiceAccount, and that this replay names what was created and fails, never passes, on an error.
+- `tests/test_cluster_acceptance_script.py` runs `../run_cluster_acceptance.sh`, stage 9, offline from a scratch checkout in which `docker`, `uname`, `build_image.sh`, `release.sh` and the pinned helm, kubectl and kind are recording stubs that keep an inventory of what they were asked to create, the stub `docker` answers `crictl` in the node and lists images by label, the stub `release.sh` writes a test release's directory and tags its two images, and the copied pin file carries the stubs' SHA-256: usage errors; every refused prerequisite — another system or architecture, an unsupported Engine or daemon platform, an old Compose plugin, a missing tool, one of another hash or version, a missing `.venv`, `openssl`, SBOM tool or buildx plugin, a `VERSION` with a pre-release part, a release record without the preceding PubDex release or with a malformed entry, a clone without the commit of that release's chart — refused before anything is created, and a chart of another version than the record names at that commit refused before any cluster exists; revision 1 installed from the preceding release's chart, which a stub of the repository's history gives for the commit the release record names, with the record's published images by digest, which the node pulls without credentials while only the images under test are loaded; the dry runs of revision 1, of this checkout's chart with the upgrade's values and of the three files that no step installs, before the install; a failed pull ending the run with a message that names the registry, before any helm call and with the cleanup confirmed; given images that are the published ones, and images under test with a published image's id, refused; a kubeconfig whose server is another address or another loopback port, that holds a second context, or a control plane published beyond loopback, refused before any kubectl or helm call that could reach a cluster, with the run's cluster, network and tags removed all the same; every kubectl and helm call naming the run's kubeconfig and context, with the run's `HOME`, cache, helm and Docker configuration directories and none of a polluted caller's `KUBECONFIG`, `HELM_*` or `KUBECACHEDIR`, kind running with the run's network and the caller's Docker client configuration, and the caller's `~/.kube/config` untouched; the cleanup deleting the cluster before the network and the network before the image tags, leaving a network named `kind` and another cluster alone, and failing with the commands that find what it could not remove; SIGTERM, SIGINT and SIGHUP during the install ending the run with 143, 130 and 129 after the cleanup; the fallback to an image archive when `kind load docker-image` fails; given images tagged, never built, their labels checked, and left in place; test releases A and B1 built by `release.sh` into the run's directory before the cluster exists, both images of each loaded after the images under test, a failed build, a test release of other schema changes than the checkout's (A) or than those and one more (B1), and two of one transform version stopping the run, and their images removed by tag and, a dangling one included, by version label. From the script's text it checks that the step numbers and the header agree; that the floor starts only after the first cluster is gone, that no published image reaches its node before the install, and that its operator's Role grants exactly the access rights `../KUBERNETES.md` lists; that in external mode, before the test releases, only the password change's upgrade has the admin Secret, the routine upgrade alone switches the setup off, the rollback returns to revision 1 and its published images, the routine upgrade, the rollback and the uninstall each show from the API server's replayed watch that they created nothing, while the same replay around the password change's upgrade has to find the setup's Job, ConfigMap and ServiceAccount and the schema upgrade's Job and ServiceAccount, and that this replay names what was created and fails, never passes, on an error; and that steps 22 to 26 empty the server before A installs from its chart package file with both images set explicitly, try B1 as a routine upgrade with the short timeout, the same upgrade as step 24's but with the setup switched off, tolerating only Helm's own failure line among warnings, show why it cannot complete, create the admin Secret only around step 24's upgrade, and roll back to A without it. It runs the check of B1's not-ready answer on sample answers.
 - `tests/test_kubernetes_guide.py` keeps `../KUBERNETES.md` in agreement with the chart and with stage 9, offline: the guide's appendix has one row for every block of shell commands, in order, matching the block's section and text; each step of `../run_cluster_acceptance.sh` a row names exists and, read with the functions it calls, runs one of the block's kubectl and helm commands, and the steps together run all of them with every long option; each stage 8 test a row names exists; and the guide's table of values names every key of `../charts/pubdex/values.yaml`.
+- `tests/test_deployment_guide.py` keeps `../DEPLOYMENT.md`, *Upgrading to a new release*, in agreement with stage 11, offline: the section's table has one row for every block of shell commands, in order, matching the block's text; each step of `../run_upgrade_acceptance.sh` a row names exists, is one the testing strategy numbers, and, read with the functions it calls, runs one of the block's commands; and every `docker` command of the block is one those steps run, its words in order on one command line. Every word of every command, altered once, is found.
+- `tests/test_releasing_guide.py` keeps `../RELEASING.md` in agreement with the tree and with stage 10, offline: its table has one row for every block of shell commands, in order, matching the block's text, saying which stage ran it or that only a real PubDex release does, and the release-only rows that publish name the stubbed tests that cover them; each step of `../run_release_rehearsal.sh` a row names exists, is one the testing strategy numbers, and runs the block's `release.sh` command, every option that differs between the two named in the row; each script, file and option a block names exists; and the rows naming stage 1 name a program `run_checks.sh` runs or a test module that runs it.
 - `tests/test_external_setup_script.py` runs `../charts/pubdex/files/external-setup.sh`, the preparation of a database on an operator's PostgreSQL server for the chart's external mode, against stub `psql` and `setsid` executables that answer its read-only query with the facts a test gives and record every call. It shows that the run stops before any change, naming every reason at once, for a server that is not PostgreSQL 16, an admin role without CREATEROLE or ownership, part of the schema, the roles of another installation, a missing ADMIN OPTION and extensions that cannot be created, and before the server is contacted for unusable or shared password files; that a database without the schema gets the init files in one transaction, in name order, with exactly three lines of `init/000_init.sql` left out, and an initialised one skips that step; that the two role passwords reach psql only on its input and the admin's only through a libpq password file of mode 0600 that is removed afterwards, none on a command line, in an environment or in the output; that each role has to log in again by SCRAM; and that every connection, the admin's three included, requires SCRAM (`PGREQUIREAUTH=scram-sha-256`): a server that asks any of them for a cleartext password, which the stub answers as libpq does, gets none and the run ends there, and an inherited `PGREQUIREAUTH` other than `scram-sha-256` stops the run before the server is contacted.
 - Integration tests live under `tests/integration/` and are skipped unless `PEOPLE_PUBS_INTEGRATION_DSN` or `PEOPLE_DB_TEST_DSN` points at a disposable PostgreSQL database; `./run_disposable_integration.sh` provides one and runs them all, while `./run_tests.sh`, and with it `../run_checks.sh`, never passes an inherited value of either variable on, so there they always skip.
 
@@ -958,7 +1133,11 @@ and needs no existing database:
    checkout); either way it prints the container's log tail, with the
    password masked. It then prints the image digest and server version it
    ran against.
-3. It runs `./run_integration_tests.sh` in an environment from which every
+3. It applies the schema upgrade, `python -m people_pubs.schema upgrade`, in
+   the environment of step 4, its output masked; a failed schema upgrade ends
+   the run with its status before any test runs, so the tests always run on
+   the baseline plus every schema change, as on a deployment.
+4. It runs `./run_integration_tests.sh` in an environment from which every
    exported variable and function has been removed and in which
    `PEOPLE_PUBS_INTEGRATION_DSN`, `PEOPLE_DB_TEST_DSN`, `PEOPLE_DB_DSN` and the
    libpq settings (`PGHOST`, `PGHOSTADDR`, `PGPORT`, `PGUSER`, `PGPASSWORD`,
@@ -968,12 +1147,21 @@ and needs no existing database:
    elsewhere. The shell exports these values itself before it `exec`s the
    command, so none of them is ever on a command line. Extra arguments go to
    pytest; `PYTEST_ADDOPTS` from the caller does not.
-4. It re-applies `init/010_ingestion_runtime_schema.sql` to that database and
+5. It re-applies `init/010_ingestion_runtime_schema.sql` to that database and
    reruns `tests/integration/test_publication_views_integration.py` and
    `tests/integration/test_application_roles_integration.py`, so the read
    views and the grants of the database roles are also proven on a
    database the runtime patch, which re-creates views and re-issues grants,
    has been applied to twice.
+6. It runs `tests/restore_helper_check.py` in that isolated environment: an
+   explicit synthetic dump, container, database and backup directory are passed
+   to the actual development `restore_db.sh`, with globals, curation and
+   Compose startup disabled. It checks the exact schema record, restored
+   title/year, ownership and schema support as both application roles, then
+   reruns the view and role tests to verify read/write boundaries. This covers
+   the helper's `--no-owner` restore retaining ACLs; the canonical Compose
+   restore in stages 7 and 11 retains owners as well and skips the baseline
+   patch. No private configuration or backup is read.
 
 Every test has to run: a skipped test, or a run in which no test ran at all,
 fails even when pytest itself passed, so a broken database binding cannot pass
@@ -984,10 +1172,10 @@ volume carrying this run's label, and the run's private temporary directory,
 and then confirms that nothing is left; if something is, or Docker cannot
 say, it prints the `docker` commands that find it, and a run that had passed
 fails with status 1, while a failed one keeps its own status. The superuser password is generated
-per run, reaches Docker and the test command only through their environment,
-never through a command line, is never printed or written to a file, and is
-masked in the test output, in the container diagnostics and in the error
-output of a failed re-application.
+per run, reaches Docker, the schema upgrade and the test command only through
+their environment, never through a command line, is never printed or written
+to a file, and is masked in the output of the schema upgrade and the tests, in
+the container diagnostics and in the error output of a failed re-application.
 
 Safety net (added 2026-07-13 after a real near-miss):
 `tests/integration/conftest.py` exports `PEOPLE_DB_DSN` to the
@@ -998,6 +1186,74 @@ still pass explicit DSNs; this guard only changes the failure mode of a
 missed patch from "writes to a real database" to "wrong rows in the
 disposable one". The network guard (see *Network access during tests*) now
 refuses a psycopg connection to any other server outright.
+
+## The schema upgrade's tests
+
+`DB/init/` is the baseline, the schema of PubDex 0.1.0, and never changes;
+every later change of the schema is a schema change in `DB/schema/`, which
+`python -m people_pubs.schema upgrade` applies and records in
+`pubdex.schema_changes` (`people_pubs/schema.py` documents the rules). Every
+database of the suite takes this path: stage 3 checks it step by step, and
+stages 4 and 5 apply the schema upgrade after the baseline before they use
+the database.
+
+- **Offline, stage 1.** `tests/test_schema_changes.py` holds the SHA-256 of
+  each file of `/opt/pubdex/init` in the published 0.1.0 application image
+  and fails when `DB/init/` differs in any file, an added or a removed one
+  included; it also checks that every file of `DB/schema/` follows the rules
+  and that the changes of 0.2.0 only add, by the compatibility heuristic.
+  `tests/test_schema_runner.py` covers the rest without a server: how a file
+  is read and when it is refused, how statements are split, the heuristic,
+  how a database is placed and every refusal, the order of the changes, the
+  lock, a failed change, the command line's usage and password-file errors,
+  and the exact messages.
+- **Stage 3**, `./run_migration_smoke.sh`: the baseline without a record,
+  the schema upgrade run from `.venv` with the password in a pipe that
+  `PEOPLE_DB_PASSWORD_FILE` names, the record against `DB/schema/` and the
+  release in `VERSION`, the application roles' privileges on every table and
+  sequence of `app`, `biblio` and `activity` and on the record, then a second
+  schema upgrade and `status` that leave the record unchanged, and two
+  re-applications of the runtime patch that leave it unchanged too.
+- **Stage 5**, `tests/integration/test_schema_runner_integration.py`, on
+  databases of its own on the disposable server: a baseline with every
+  change and a second run; a change that fails halfway, which leaves nothing
+  of itself while the changes before it stay recorded, and the next run;
+  two runners at once, the second waiting and then finding nothing to do,
+  and a runner that gives up after its lock timeout; a role that is not a
+  superuser, owning the baseline it applied as in external mode, upgrading
+  it through the command line while a superuser that does not own it is
+  refused; and the refusals of a database without the PubDex schema, with
+  part of the baseline, with an edited change or with a later release's
+  change that is not backward compatible. The role tests check the record's
+  privileges on the suite's own upgraded database, again after the runtime
+  patch has been re-applied.
+
+The deployments run the same command. The Compose deployment runs it as
+its one-shot service `schema-upgrade`, which stages 6 and 7 check; the
+Helm chart as a Job in evaluation mode and as a hook after the setup in
+external mode, which stage 8 renders and stage 9 runs (each below). The upgrade from one PubDex release to another, with
+the schema changes between them, is stage 9's on Kubernetes and stage 11's
+on Compose: from the published preceding release to the checkout, and from
+test release A to B1, whose test-only overlay adds a backward-compatible
+schema change, and, on Compose, to B2, which adds one that is not.
+
+The application's schema contract is checked offline in
+`tests/test_schema_support.py` and on disposable PostgreSQL databases in
+`tests/integration/test_schema_support_integration.py`. Both the read service
+and the roster ingestion command refuse a database without a recorded schema
+version, an older schema and an incompatible newer schema; they accept the
+matching schema and a newer schema whose later changes are backward compatible.
+Readiness and publication requests check on every request, so an upgrade is
+visible without restarting the read service. Liveness remains independent.
+Stage 6 first starts PostgreSQL and the read service without the schema
+service on fresh volumes: readiness reports `schema_upgrade_required`, the
+unrecorded schema version and `python -m people_pubs.schema upgrade`; the
+probe prints the message and liveness answers 200. It then runs the schema
+service and continues the normal acceptance path.
+
+`tests/test_release_version.py` checks that `VERSION`, both Compose image
+defaults, the chart's `version` and `appVersion`, and both chart image tags
+agree. Mutating each value independently proves that a mismatch fails.
 
 ## The Compose deployment's acceptance test
 
@@ -1044,22 +1300,35 @@ that fails:
    `--release` needs `--image`, `--expect-version` and a full commit id for
    `--expect-revision`, refuses a reference whose tag names another version
    and, with `--pull`, one without a digest; the version is always read
-   from the label, never from a tag.
+   from the label, never from a tag. With `--release` the image's
+   `compose.yaml` also has to have the `schema-upgrade` service. Last, in a
+   fourth container as user 10001, the run lists the schema changes the
+   image carries in `/opt/pubdex/schema` by number, name and SHA-256: an
+   image without any predates the schema upgrade and is refused, and a
+   build has to carry exactly the checkout's `DB/schema/`.
 2. **Secrets, settings and the project directory.** `../create_secrets.sh`
    creates the three password files in the run's private temporary
    directory (directory 700, files 444), and an environment file of the
    run's own sets the image, that directory, the loopback address and a
    port Docker picks. The project directory, also the run's own, holds the
    selected `compose.yaml` and nothing else. The rendered configuration has
-   to name the run's project, image and label, list the five services, keep
-   the `bootstrap` service off every network and without a secret, keep
-   PostgreSQL and ingestion on the internal network, and must not contain a
-   password.
+   to name the run's project, image and label, list the six services, give
+   each service only its own password files — the superuser's to
+   PostgreSQL and `schema-upgrade` alone, none to `bootstrap` — start
+   `schema-upgrade` once PostgreSQL is healthy, read-only, without
+   capabilities and port, and the read service, `ingest` and `demo` only
+   after it has succeeded, keep the `bootstrap` service off every network,
+   keep PostgreSQL, the schema upgrade and ingestion on the internal
+   network, and must not contain a password.
 3. **The first start.** `docker compose up --wait` on empty volumes; the
    `bootstrap` service's log has to show that it copied the image's schema
    files — for a build, exactly the checkout's `init/`, by SHA-256 — and the
    PostgreSQL log that it ran `init/020_role_passwords.sh`, which gave both
-   application roles their passwords. The containers may mount nothing but
+   application roles their passwords. The `schema-upgrade` container has to
+   have exited with status 0, its log has to show the baseline found and
+   every schema change of the image applied, and `pubdex.schema_changes`,
+   read as `app_readonly`, has to hold exactly the image's changes by
+   number, name and SHA-256, applied by the image's version. The containers may mount nothing but
    the project's two volumes and the run's secret files: nothing of the
    checkout or of the project directory.
    The read service has to run exactly the selected image and be published
@@ -1088,7 +1357,8 @@ that fails:
    the stack again, the `bootstrap` service copying the schema files each
    time. After each, PostgreSQL has to skip initialisation — the
    log shows `Skipping initialization`, not `020_role_passwords.sh`, which is
-   what tells a restart from a first start — and the stack has to serve the
+   what tells a restart from a first start — the schema upgrade has to find
+   nothing to do and leave the record as it was, and the stack has to serve the
    same publication, with the same `pub_id`, while `app_writer` still logs in.
 8. **Secrets, and a clean stop.** A rerun of `create_secrets.sh` has to keep
    all three files byte for byte. The environment of the database server's
@@ -1154,7 +1424,9 @@ fails:
 3. **The first start.** `docker compose up --wait`; the `bootstrap`
    service's log has to show that it copied the image's schema files, and
    the PostgreSQL log that they ran and gave both application roles their
-   passwords; the containers may mount nothing but the project's two
+   passwords; the `schema-upgrade` log that it found the baseline and applied
+   the image's schema changes, as many as `pubdex.schema_changes` then
+   records; the containers may mount nothing but the project's two
    volumes and the secret files; the read service has to run the selected
    image and be published on
    127.0.0.1 at the configured port alone, PostgreSQL on no host port;
@@ -1196,7 +1468,9 @@ fails:
    service has to have restarted, the three roles have to be accepted with
    the new passwords and refused with the old ones on new TCP connections
    from a new ingestion container, which reads the passwords it tries from
-   its standard input, and the read service has to answer `/readyz` 200 and
+   its standard input and starts with `--no-deps`, without the schema
+   upgrade that `docker compose run` would otherwise start first with the
+   superuser's file, and the read service has to answer `/readyz` 200 and
    serve the same publication. Its pooled connections are not taken as
    evidence: they stay logged in after the change, which is why the restart
    is part of the procedure.
@@ -1225,7 +1499,9 @@ fails:
    set from the files, now the third generation — and start no read
    service; then `docker compose stop api`, `dropdb --force`, `createdb`,
    `pg_restore --single-transaction --exit-on-error` from the dump on
-   standard input, and `docker compose up --wait`. The verification query
+   standard input, and `docker compose up --wait`, whose schema upgrade has
+   to find the record of schema changes the dump brought and nothing to do,
+   leaving that record as it was dumped. The verification query
    has to count the same again, the read service has to serve the same
    publication with the same `pub_id`, the database to hold the roster's
    records, and `app_writer` to refresh the restored snapshot, which takes
@@ -1322,6 +1598,14 @@ and the version it reports with the pin. Then:
    - **Refused values.** The tests give values that the schema or the
      templates have to refuse, and check each refusal for its message.
      Kubernetes releases below the floor are refused too.
+   - **The package.** `helm package` packages the chart as `../release.sh`
+     does, with `SOURCE_DATE_EPOCH` and a test release's version: the same
+     bytes from a copy whose files have other times, every file of the chart
+     and the repository's `LICENSE`, no Markdown link that leaves the
+     package, the chart's own files named relative to the chart, every other
+     file it names one its README locates, and `create_secrets.sh` never
+     invoked as if it lay beside the chart. The package lints and renders
+     from the file.
 
 helm runs with a cleared environment. Its home, temporary, configuration,
 cache, data and Docker configuration directories lie in a temporary
@@ -1347,27 +1631,55 @@ one after the other, with the pinned kind from the pinned node images
 ([`lib/cluster_tools.sh`](lib/cluster_tools.sh)), and deletes again: in both
 of its modes on the newest release the chart supports, Kubernetes 1.37, and
 evaluation mode's lifecycle on the oldest, Kubernetes 1.35, the floor. It
-needs Linux on x86_64, Docker, the pinned helm, kubectl and kind under
-`.tools/`, whose hashes and versions it checks first, `.venv`, `openssl`,
-and access from the clusters' nodes to the registry of the published images
-(`ghcr.io` for the chart's defaults). Revision 1 of each release runs the
-published images the chart names by default, by registry, tag and digest;
-revision 2 runs the images under test.
+needs Linux on x86_64, Docker with the buildx plugin, the pinned helm,
+kubectl and kind under `.tools/`, whose hashes and versions it checks first,
+the pinned SBOM tool of `../release.sh setup`, `.venv`, `openssl`, GNU tar,
+access from the clusters' nodes to the registry of the published images
+(`ghcr.io` for the release record's), and a clone with the history of the
+preceding PubDex release's chart. Revision 1 of each Helm release is the
+preceding PubDex release as an operator has it installed: the newest
+release below `VERSION` in the release record (`../releases/`, read by
+[`release_record.py`](release_record.py)), its chart, `charts/pubdex/` at the
+commit its entry names, which `git archive` takes from the repository's
+history into the run's temporary directory, and its two published images by
+registry, tag and digest. A clone without that commit, a shallow one, fails
+before anything is created. Revision 2 is this checkout's chart with the
+images under test.
 
-The upgrades of steps 8, 16 and 27 show that the chart replaces the images
-of a running release and keeps its data, for images of one schema. The
-database keeps the schema that the published images created: PostgreSQL
-runs `DB/init/` only on an empty volume, the setup of external mode applies
-it only to a database without the PubDex schema, and the chart has no
-migrations ([`../KUBERNETES.md`](../KUBERNETES.md), *Upgrade*). The three
-steps therefore assume that the checkout's `DB/init/` is that of the
-published release whose images revision 1 runs, 0.1.0 for the chart's
-defaults. Once `DB/init/` changes, the images under test run on a schema
-they were not built for, and the steps can fail for reasons outside the
-chart, or pass on an upgrade that the guide calls unsafe. A change of
-`DB/init/` has to come with a decision about these three steps. An upgrade
-between releases is task 2c; the guide's *Upgrade* says that it is not
-supported yet.
+External mode also upgrades between two ***test releases*** of the checkout,
+which `../release.sh build --test` builds and verifies under versions
+reserved for test releases, with names of the run's own: A, the checkout as
+it is, and B1, the checkout with the test-only overlay `b1` of
+`tests/release_overlay/`, one backward-compatible schema change after the
+checkout's and a new transform version. Each is installed from its chart
+package file, with both images loaded into the node and set explicitly by
+the local tags only this run gives them: in external mode the setup Job runs
+the PostgreSQL image's `psql`. They are built with `--image` too:
+they test the mechanism of the upgrade between PubDex releases, whatever
+images the rest of the run tests.
+
+The upgrades of steps 8, 17 and 33 run the schema upgrade: in evaluation
+mode the revision's Job, which Helm waits for with `--wait-for-jobs`, and in
+external mode the hook after the setup. After each, the database records
+exactly the schema changes of `schema/`, by number, name and SHA-256, which
+the run computes from the files, and the demonstration's publication is
+still served. The rollbacks of steps 9, 20 and 34 return to revision 1's
+chart and images and leave the schema and its record as they were; the
+preceding release's images serve the publication on that schema, which
+backward-compatible schema changes allow. That the checkout's `init/` is
+still the baseline, the schema of 0.1.0, is shown by
+`tests/test_schema_changes.py` and by the schema upgrade itself, which
+refuses a database it does not recognise.
+
+`tests/test_release_record.py`, in stage 1, checks the release record and
+its reader offline: 0.1.0's entry names the published commit, both image
+digests, no schema change, the transform version 1.5.3 and its chart's
+commit; every committed entry passes the reader's checks and `FLOOR` names
+one of them; versions order as Semantic Versioning orders them, a test
+release's version included; the preceding release is the newest entry below
+`VERSION` or below a given version; and a malformed entry, a test release in
+the record, a `FLOOR` naming no recorded release and an unknown release are
+refused with a message that says why.
 
 Every step runs on every run; no option or setting skips one. One run:
 
@@ -1375,7 +1687,13 @@ Every step runs on every run; no option or setting skips one. One run:
    of its own, as stage 6 does, and checks their version and revision
    labels; with `--image` and `--postgres-image` it tags the given images
    instead, and refuses them when they are the published images, which the
-   upgrade has to replace;
+   upgrade has to replace. It then takes the preceding release's chart from
+   the repository's history and checks that its version is the one the
+   release record names. Last, it builds test releases A and B1 with
+   `release.sh build`, each into its temporary directory with `TMPDIR`
+   there, and checks that A's source archive holds exactly the checkout's
+   schema changes and B1's those and one more, and that B1's application
+   image carries another transform version than A's;
 2. creates a Docker network of its own and the kind cluster on it, with a
    kubeconfig in its temporary directory, and checks that kubeconfig before
    any kubectl or helm call (*Isolation and cleanup*);
@@ -1385,7 +1703,9 @@ Every step runs on every run; no option or setting skips one. One run:
    without credentials (`crictl pull`). Without access to their registry
    the run fails at this step with a message that says so; it never skips
    the upgrade from the published images. The images under test must have
-   other image ids than the published ones.
+   other image ids than the published ones. Then it loads both images of
+   test releases A and B1; their application images have different ids in
+   the node.
 
 Evaluation mode, release `pubdex` in namespace `pubdex`:
 
@@ -1393,34 +1713,49 @@ Evaluation mode, release `pubdex` in namespace `pubdex`:
    audited, and the Secret from the files of `../create_secrets.sh`, with
    `kubectl create secret generic --from-file`, as the chart's values
    describe it;
-5. validates every rendered object of revision 1 with a server-side dry run
+5. validates every rendered object of revision 1, the preceding release's
+   chart, and of this checkout's chart with the upgrade's values, the
+   schema upgrade's Job included, with a server-side dry run
    (`kubectl create --dry-run=server`), which has to pass admission without
-   a warning; `helm test`'s pod gets the same dry run once the release's
-   ServiceAccount exists. The same dry run, without `helm test`'s pod,
-   admits what no step installs, each file on its own: the two ingress
-   examples, `../charts/pubdex/examples/values-ingress-tls.yaml` and
+   a warning; `helm test`'s pod of each chart gets the same dry run once the
+   release's ServiceAccount exists. The same dry run of this checkout's
+   chart, without `helm test`'s pod, admits what no step installs, each file
+   on its own: the two ingress examples,
+   `../charts/pubdex/examples/values-ingress-tls.yaml` and
    `values-ingress-cert-manager.yaml`, and
    `../charts/tests/values/evaluation.yaml`, which sets the six scheduling
    keys at the top level and replaces some for the read service and
    PostgreSQL. The PriorityClasses it names exist in no cluster of the run:
    a dry run creates no pod, the only object whose class the API server
    resolves. Nothing is scheduled and no ingress controller runs;
-6. installs revision 1, the published images, with the demonstration and
-   `--wait`: the demonstration's `post-install` Job has to complete;
-7. checks that every pod runs the published image by its digest, reads
+6. installs revision 1, the preceding release's chart and published images,
+   with the demonstration and `--wait`: the demonstration's `post-install`
+   Job has to complete;
+7. checks that every pod runs the published image by its digest and that
+   the database's record of schema changes is the preceding release's
+   (none for 0.1.0, which ships no schema change), reads
    `GET /v0/publications` through `kubectl port-forward` on 127.0.0.1, field
    by field as stage 6 does, and `/readyz`, finds the port forward in what
    `helm get notes` prints, then runs `helm test`;
-8. upgrades to the images under test with another log level in the
-   ConfigMap and two read-service replicas. Every pod has to be replaced
-   and run the new image, the settings' checksum has to change, the
-   publication keeps its `pub_id`, PostgreSQL's log shows that it skipped
-   initialisation on its volume, and `app_readonly` and `app_writer` log in
-   with their passwords over SCRAM;
-9. rolls back to revision 1, with the same checks, finds the rollback as
-   revision 3 in the release's history, and finds revision 1's values,
-   both published images by digest among them, in what
-   `helm get values --all` prints;
+8. upgrades to this checkout's chart and the images under test, with
+   another log level in the ConfigMap and two read-service replicas, and
+   `--wait-for-jobs`. The revision's schema upgrade Job has to complete,
+   and the log of its pod to say that it applied what was outstanding; the
+   database has to record exactly this checkout's schema changes. Every pod
+   has to be replaced and run the new image, the settings' checksum has to
+   change, the publication keeps its `pub_id`, PostgreSQL's log shows that
+   it skipped initialisation on its volume, `app_readonly` and `app_writer`
+   log in with their passwords over SCRAM, and `helm test` passes;
+9. rolls back to revision 1, with the same checks; the record of schema
+   changes is unchanged, revision 2's schema upgrade Job is gone with its
+   revision, and the preceding release's images serve the publication on
+   this checkout's schema. It finds the rollback as revision 3 in the
+   release's history, and revision 1's values, both published images by
+   digest among them, in what `helm get values --all` prints. Then it
+   upgrades to this checkout's chart and the images under test again, with
+   revision 1's log level and one replica: the new revision's schema
+   upgrade Job finds nothing to do, the record is unchanged, and steps 10
+   to 13 run this checkout's chart and images;
 10. changes every password: new files from `../create_secrets.sh` replace
     the Secret's (`kubectl create secret generic … --dry-run=client
     --output yaml | kubectl replace --filename -`), the image's
@@ -1448,24 +1783,36 @@ Evaluation mode, release `pubdex` in namespace `pubdex`:
 13. uninstalls the release: the database volume's claim and the operator's
     Secret remain, as the chart's notes say, and are then deleted with the
     notes' command and `kubectl delete secret`, after which the volume is
-    gone and the namespace holds nothing of the release.
+    gone and the namespace holds nothing of the release;
+14. installs this checkout's chart afresh, as the guide's short path does,
+    with the images under test, a new Secret, the demonstration, `--wait`
+    and `--wait-for-jobs`: PostgreSQL initialises the baseline on its new
+    volume, the schema upgrade Job of revision 1 applies every schema change
+    of the checkout, and Helm starts the demonstration's `post-install` Job
+    only after that Job has completed. The database records exactly this
+    checkout's schema changes, every pod runs the images under test, the
+    publication is served and `helm test` passes. The release is then
+    uninstalled, and the claim and the Secret deleted, as in step 13.
 
 External mode, release `pubdex` in namespace `pubdex-external`:
 
-14. starts a PostgreSQL server of its own in namespace `pubdex-db`, which
+15. starts a PostgreSQL server of its own in namespace `pubdex-db`, which
     also enforces `restricted`: the published PostgreSQL image, prepared as
     a managed service would be. Its superuser is `clusteradmin`, no role is
     named `postgres`, and the database `people_db` belongs to
     `people_db_owner`, which has `CREATEROLE` and is no superuser. It serves
     TLS with a certificate for its Service's DNS name, issued by a CA the run
     creates with `openssl`;
-15. creates the namespace, the Secret with the two application roles'
+16. creates the namespace, the Secret with the two application roles'
     passwords, the admin Secret and the CA's ConfigMap with the commands of
-    [`../KUBERNETES.md`](../KUBERNETES.md), and installs revision 1 with
-    `../charts/pubdex/examples/values-external.yaml`, the server's host and
-    two on-demand ingestion tasks, after a server-side dry run. The setup
-    Job, a `pre-install` hook, prepares the database as `people_db_owner`;
-    its Job, ConfigMap and ServiceAccount are gone afterwards. The run then
+    [`../KUBERNETES.md`](../KUBERNETES.md), and installs revision 1, the
+    preceding release's chart with its own `examples/values-external.yaml`,
+    its published application image, the server's host and two on-demand
+    ingestion tasks, after server-side dry runs of revision 1 and of this
+    checkout's chart with the upgrade's values. The setup Job, a
+    `pre-install` hook, prepares the database as `people_db_owner`; its Job,
+    ConfigMap and ServiceAccount are gone afterwards, and the record of
+    schema changes is the preceding release's. The run then
     deletes the admin Secret and checks that no pod or workload of the
     namespace refers to it, and that the read service's sessions use TLS
     (`sslmode` `verify-full` against the run's CA). It runs the synthetic
@@ -1478,13 +1825,17 @@ External mode, release `pubdex` in namespace `pubdex-external`:
     runs in the same attached pod: standard output has to be the CSV, with
     the demonstration's publication, and standard error the export's log.
     It reads the publication and runs `helm test`;
-16. upgrades to the images under test with the changed values, the admin
-    Secret created for the `pre-upgrade` hook and deleted after it: every
+17. upgrades to this checkout's chart and the images under test with the
+    changed values, the admin Secret created for the `pre-upgrade` hooks
+    and deleted after them:
+    the setup, then the schema upgrade, which applies this checkout's schema
+    changes as `people_db_owner`. The database records exactly those
+    changes, applied by that role; Helm deleted both hooks' objects; every
     read-service pod is replaced, the schema's objects keep their object ids
     on the server (no second initialisation), the publication keeps its
     `pub_id`, and `helm test` passes;
-17. changes both role passwords: the Secret is replaced as in step 10,
-    `helm upgrade` with step 16's values files runs the setup again with
+18. changes both role passwords: the Secret is replaced as in step 10,
+    `helm upgrade` with step 17's values files runs the setup again with
     the admin Secret, and `kubectl rollout restart` restarts the read
     service. `--reuse-values` would keep a setup that a routine upgrade
     switched off, so the guide and this step give the values files. Both
@@ -1492,40 +1843,47 @@ External mode, release `pubdex` in namespace `pubdex-external`:
     are refused. The admin Secret is created just before that upgrade and
     deleted right after it, and is never created again. Around that
     upgrade the run notes the `resourceVersion` of the namespace's lists of
-    Jobs, ConfigMaps and ServiceAccounts, the kinds of the setup's hooks,
-    and afterwards has the API server replay its watch of each from there:
-    it has to show exactly the setup's Job, ConfigMap and ServiceAccount,
-    created, although Helm deleted them again once the Job succeeded. If the
-    API server can no longer replay from that version, the check fails;
-18. runs a routine upgrade, one that changes no password: the API server
-    first answers that the admin Secret does not exist. The same upgrade
-    without the switch runs first, so with the setup, as an operator who
-    forgot the switch would: it has to fail in its `pre-upgrade` hook, in
-    less than half of the timeout, and `kubectl logs job/pubdex-setup` has
-    to say that the file of `PEOPLE_PUBS_SETUP_ADMIN_PASSWORD_FILE` does not
-    exist because its Secret is missing. `helm status` reports revision 4 as
-    `failed`, `helm history` still shows revision 3 as `deployed`, of the
-    setup's objects only the Job is left, and the read service runs on with
-    the same pods and log level and serves the publication. Then
-    `helm upgrade` with
+    Jobs, ConfigMaps and ServiceAccounts, the kinds of the setup's and the
+    schema upgrade's hooks, and afterwards has the API server replay its
+    watch of each from there: it has to show exactly the setup's Job,
+    ConfigMap and ServiceAccount and the schema upgrade's Job and
+    ServiceAccount, created, although Helm deleted them again once their
+    Jobs succeeded. If the API server can no longer replay from that
+    version, the check fails. The schema upgrade found nothing outstanding:
+    the record of schema changes is unchanged;
+19. runs a routine upgrade, one that changes no password and no schema: the
+    API server first answers that the admin Secret does not exist. The same
+    upgrade without the switch runs first, so with the setup, as an
+    operator who forgot the switch would: it has to fail in its
+    `pre-upgrade` hook, in less than half of the timeout, and
+    `kubectl logs job/pubdex-setup` has to say that the file of
+    `PEOPLE_PUBS_SETUP_ADMIN_PASSWORD_FILE` does not exist because its
+    Secret is missing. `helm status` reports revision 4 as `failed`,
+    `helm history` still shows revision 3 as `deployed`, of the hook
+    objects of the setup and the schema upgrade only the setup's Job is
+    left, and the read service runs on with the same pods and log level and
+    serves the publication. Then `helm upgrade` with
     `--set externalDatabase.setup.enabled=false` changes one setting, the
     log level. The same replay, from before this upgrade, has to show no
-    object created, so no setup ran. `helm get hooks` shows that revision 5
-    carries only `helm test`'s hook. Every read-service pod is replaced and
-    runs the same image, and the schema's objects keep their ids. The failed
+    object created, so neither the setup nor the schema upgrade ran.
+    `helm get hooks` shows that revision 5 carries only `helm test`'s hook.
+    Every read-service pod is replaced and runs the same image, and the
+    schema's objects keep their ids and the record its rows. The failed
     setup's Job is still there, and the guide's
     `kubectl delete job,configmap,serviceaccount` removes it and, with it,
     its pod; no pod or workload then refers to the admin Secret, the
     publication keeps its `pub_id`, and `helm test` passes;
-19. rolls back to revision 1 with `helm rollback`, still without the admin
-    Secret. The rollback's revision carries revision 1's hooks, among them
-    the setup's `pre-install,pre-upgrade` hooks (`helm get hooks`), and the
-    replayed watch shows that nothing was created: Helm ran none of them.
-    Every pod runs the published image by its digest, with the passwords of
-    step 17; the schema's objects keep their ids, the publication keeps its
-    `pub_id`, `helm history` shows revision 6 as the rollback to 1,
-    `helm test` passes, and the admin Secret still does not exist;
-20. uninstalls the release without the admin Secret, and the replayed watch
+20. rolls back to revision 1, the preceding release's chart and image, with
+    `helm rollback`, still without the admin Secret. The rollback's revision
+    carries revision 1's hooks, among them the setup's
+    `pre-install,pre-upgrade` hooks (`helm get hooks`), and the replayed
+    watch shows that nothing was created: Helm ran none of them. Every pod
+    runs the published image by its digest, with the passwords of step 18;
+    the schema's objects keep their ids and the record its rows, the
+    publication keeps its `pub_id`, `helm history` shows revision 6 as the
+    rollback to 1, `helm test` passes, and the admin Secret still does not
+    exist;
+21. uninstalls the release without the admin Secret, and the replayed watch
     shows nothing created: the operator's Secret and the CA's ConfigMap
     remain, and the server keeps the database, the publication and the
     roles `app_readonly`, `app_writer` and `maintenance`, as the chart's
@@ -1533,20 +1891,64 @@ External mode, release `pubdex` in namespace `pubdex-external`:
     `FailedCreate` event in any namespace shows a pod that admission
     refused.
 
+External mode, test release A to test release B1, release `pubdex` in
+namespace `pubdex-external`, on the same server:
+
+22. drops the database and the three roles step 21 left on the server, as
+    the guide's *Uninstall* allows, and creates the database again for the
+    admin role, so that the server is as step 15 checked it. With Secrets of
+    new passwords and the CA's ConfigMap, it installs A from its chart
+    package file with the setup: the setup applies the baseline and the
+    schema upgrade's hook the checkout's schema changes, which the database
+    records as A's, applied by the admin role. The admin Secret is deleted,
+    and the demonstration runs with the commands of step 16, now with this
+    checkout's chart and A's image: the roster through `kubectl run`, the
+    tasks `fixture` and `rules`, and the export. The publication is served,
+    and every row carries A's transform version;
+23. tries B1 as a routine upgrade, without the admin Secret and with
+    `--set externalDatabase.setup.enabled=false`, and a timeout of 30
+    seconds in place of 300: neither the setup nor the schema upgrade runs
+    (the replayed watch shows nothing created), so B1's schema change is
+    outstanding. `helm upgrade` has to fail at that timeout; `helm status`
+    reports revision 2 as `failed` and `helm history` revision 1 still
+    `deployed`. B1's read service pod runs and is not ready: its events show
+    the readiness probe failing with 503, its `/readyz` and
+    `/v0/publications` answer 503 with the reason `schema_upgrade_required`
+    and the message that names B1's schema change and the schema upgrade's
+    command, and its log names them too. A's pod is the same, ready, and
+    serves the publication, and the record of schema changes is unchanged;
+24. creates the admin Secret and runs the same upgrade with the setup: the
+    replayed watch shows the setup's and the schema upgrade's hooks
+    created, and the database records B1's schema changes, the new one
+    backward compatible and applied as B1's by the admin role. B1's pod of
+    step 23 is not replaced: it turns ready once the schema upgrade has run,
+    and A's pod goes. The admin Secret is deleted again; B1's ingestion task
+    ingests the demonstration's payloads again, and every row then carries
+    B1's transform version;
+25. rolls back to revision 1, A, without the admin Secret: an image rollback
+    after a backward-compatible schema change. The replayed watch shows
+    nothing created, the schema and its record stay as B1 left them, A's
+    read service is ready and serves the publication, A's ingestion task
+    writes on that schema, every row carrying A's transform version again,
+    and `helm history` shows revision 4 as the rollback to 1;
+26. uninstalls the release without the admin Secret, deletes the Secret and
+    the ConfigMap that remain, and checks again that admission refused no
+    pod.
+
 The floor, Kubernetes 1.35, evaluation mode, release `pubdex` in namespace
 `pubdex`:
 
-21. deletes the first cluster and its network, and confirms that they are
+27. deletes the first cluster and its network, and confirms that they are
     gone, so the two clusters never run at the same time;
-22. creates a Docker network of its own and on it a kind cluster from the
+28. creates a Docker network of its own and on it a kind cluster from the
     pinned floor node image. Its API server writes an audit log of the
     operator's requests, their metadata only, from a policy the node mounts
     from the run's temporary directory. The kubeconfig is checked as in
     step 2;
-23. loads the two images under test into the node, and checks that the
+29. loads the two images under test into the node, and checks that the
     node has neither published image, so that nothing pulls one before the
     install;
-24. as the cluster's administrator, creates the namespace with Pod Security
+30. as the cluster's administrator, creates the namespace with Pod Security
     `restricted` enforced, a ServiceAccount for the operator, a Role
     granting exactly the rights that [`../KUBERNETES.md`](../KUBERNETES.md),
     *What you need*, lists under *Access rights* and a RoleBinding, and
@@ -1556,22 +1958,24 @@ The floor, Kubernetes 1.35, evaluation mode, release `pubdex` in namespace
     step 2. The API server knows its user as
     `system:serviceaccount:pubdex:pubdex-operator`, which may not create a
     namespace;
-25. as the operator, as every step to 28, with the guide's commands:
+31. as the operator, as every step to 35, with the guide's commands:
     creates the Secret from the files of `../create_secrets.sh` and
-    validates revision 1, the two ingress examples and the scheduling
-    values with server-side dry runs, as in step 5. The audit log then
-    shows no refused request: the operator's rights cover every object
-    they render, the Ingress included;
-26. installs revision 1 with the demonstration: the chart's default images,
-    the published ones by digest, with the chart's default pull policy
-    `IfNotPresent`. The pods' events show the kubelet pulling each published
-    image, and the node's images carry their digests. The checks of step 7
-    and `helm test` follow;
-27. upgrades to the images under test with the changed values, with the
-    checks of step 8, which include `kubectl exec` and `kubectl
-    port-forward`, and `helm test`;
-28. rolls back to revision 1, with the checks of step 9;
-29. uninstalls the release and, with the notes' commands, deletes the
+    validates revision 1, this checkout's chart with the upgrade's values,
+    the two ingress examples and the scheduling values with server-side dry
+    runs, as in step 5. The audit log then shows no refused request: the
+    operator's rights cover every object they render, the Ingress and the
+    schema upgrade's Job included;
+32. installs revision 1 with the demonstration: the preceding release's
+    chart and its published images by digest, with that chart's default
+    pull policy `IfNotPresent`. The pods' events show the kubelet pulling
+    each published image, and the node's images carry their digests. The
+    checks of step 7 and `helm test` follow;
+33. upgrades to this checkout's chart and the images under test with the
+    changed values, with the checks of step 8, which include
+    `kubectl exec`, `kubectl logs` of the schema upgrade's pod and
+    `kubectl port-forward`, and `helm test`;
+34. rolls back to revision 1, with the rollback's checks of step 9;
+35. uninstalls the release and, with the notes' commands, deletes the
     database volume's claim and the Secret. As the administrator, the run
     then checks that the namespace holds nothing of the release, that the
     volume is gone and that admission refused no pod. It prints the
@@ -1580,7 +1984,7 @@ The floor, Kubernetes 1.35, evaluation mode, release `pubdex` in namespace
     operator's RoleBinding, Role and ServiceAccount, and the token no
     longer authenticates.
 
-After each of steps 25 to 29 the audit log must show no request of the
+After each of steps 31 to 35 the audit log must show no request of the
 operator that the API server refused. A refusal fails the run and names
 the verb and the resource, even where helm reports only a timeout.
 `tests/test_cluster_acceptance_script.py`, in stage 1, compares the Role
@@ -1598,18 +2002,22 @@ Docker needs the two node images and the build's inputs unless it has
 them. The run prints the versions of the tools, the node images, the API
 servers and `openssl`, the published images' digests and the image ids in
 the nodes, the Role as applied, and its duration. On the machine of its
-local record a run took about six minutes, with Docker's
+local record a run took about ten minutes (573 to 598 seconds), with Docker's
 build cache warm and the node images present. Not covered: an ingress
-controller (the Ingress is only rendered, and admitted in steps 5 and 25),
+controller (the Ingress is only rendered, and admitted in steps 5 and 31),
 a release installed with the scheduling keys set, the egress example of
 `../KUBERNETES.md`, other network plugins, a managed PostgreSQL service,
 an install without the setup Job
 (`externalDatabase.setup.enabled=false`, the manual path) in a cluster,
-which step 18 uses only for an upgrade of a release the setup prepared, a
+which steps 19 and 23 use only for an upgrade of a release the setup prepared, a
 scheduled CronJob run, the roster import in evaluation
 mode, backup and restore on the cluster, external mode on the floor, the
 guide's commands as the namespace-scoped user beyond the lifecycle of
-steps 25 to 29, and an upgrade between two chart or application releases.
+steps 31 to 35, an upgrade from a PubDex release other than the preceding
+one, the upgrade from test release A to B1 in evaluation mode and on the
+floor, an upgrade across a schema change that is not backward compatible
+(stage 11 runs it on Compose), and a Helm release in evaluation mode
+installed from a chart package file.
 
 [`../KUBERNETES.md`](../KUBERNETES.md), the operator guide, ends with an
 appendix that gives every block of commands, in order, the steps of this
@@ -1620,6 +2028,218 @@ its row, and reads this script step by step, each step with the functions
 it calls. Each step a row names has to run at least one of the block's
 kubectl and helm commands, and together they have to run all of them, with
 every long option.
+
+## The rehearsal of a PubDex release
+
+`../run_release_rehearsal.sh` is stage 10 of `../run_ci_suite.sh`. It runs
+[`../release.sh`](../release.sh) as the maintainer runs it for a PubDex
+release, on test release A: the checkout as it is, uncommitted changes
+included, under the version `<VERSION>-test.a<run>`, where `<run>` is ten
+random hexadecimal digits of the run's own. Every version whose pre-release
+part begins with `test` is reserved for test releases, and no test release
+is published. Its steps, which the script's section comments number
+alike:
+
+1. **What the rehearsal needs.** Before it builds anything: a Git checkout
+   whose `VERSION` has no pre-release part; GNU tar, gzip, `sha256sum`,
+   `cmp` and python3; the pinned helm, its SHA-256 and the version it
+   reports; a reachable Docker daemon for `linux/amd64` with a supported
+   Engine and the buildx plugin; and the pinned SBOM tool that
+   `../release.sh setup` pulls, with its pinned image id.
+2. **Test release A.** `release.sh build --test a<run>` writes test
+   release A into the run's temporary directory: the source archive, the
+   chart package, both images under local tags, an SBOM of each image, the
+   provenance record and the checksum file, and ends by verifying the
+   finished directory.
+3. **Its verification.** `release.sh verify` checks that directory again,
+   on its own, building nothing.
+4. **The second build and the comparison.** A second `release.sh build` of
+   the same version, which ends by verifying its own directory, and the
+   comparison of the two builds. Both wrote the
+   same files. The source archive and the chart package are the same, byte
+   for byte. `IMAGES` is the same but for the image ids. Each SBOM and the
+   provenance record are the same once the values a build changes are left
+   out: an SBOM's creation time, its document namespace and the image's own
+   checksum and package URL; the record's build times, image ids, config digests, creation
+   labels and the SHA-256 of `IMAGES` and of both SBOMs. The images
+   themselves get new ids, since their labels record the build's time, and
+   are not compared.
+5. **The chart from its package file**, with the pinned helm in a cleared
+   environment: `helm lint --strict` for the oldest and the newest
+   Kubernetes release the chart supports — the floor of `kubeVersion` in
+   the package's `Chart.yaml` and the release of the pinned kind node
+   image — with the chart's own values and with each example the package
+   holds, then `helm template` with each of them and test release A's
+   images. The manifests have to name exactly those two images, and the
+   chart's label the test release's version.
+6. **Nothing published.** The run's images carry only their two local
+   tags, and the Docker client configuration the run used holds no
+   registry credential.
+
+**No publication.** The script never runs `release.sh publish`,
+`docker push`, `docker tag` or `docker login`; a test in stage 1 reads the
+script for them. Every Docker command of the stage, those of `release.sh`
+and `build_image.sh` included, runs with a Docker client configuration of
+the run's own in its temporary directory, which names at most the caller's
+plugin directory (`cliPluginsExtraDirs`, for a buildx installed under
+`~/.docker/cli-plugins`), with `DOCKER_AUTH_CONFIG` and `DOCKER_CONTEXT`
+unset and `DOCKER_HOST` naming the daemon the caller's client uses. No credential of the caller's, from
+`docker login` or a credential helper, is within the run's reach. The stage
+proves that `release.sh build` and `verify` produce and accept the complete
+artifact set of the checkout, that the source archive and the chart package
+are reproducible, and that the run published nothing. It does not prove that
+`publish` works against a registry, nor the refusals that guard a PubDex
+release — a checkout with changes, a missing or misplaced annotated tag, a
+version a repository already holds as another image — which a test release
+skips:
+`tests/test_release_script.py` covers both with a stubbed `docker` in
+stage 1. A build at the tag from a clean clone, without Docker's build
+cache, stays the maintainer's step at a PubDex release.
+
+[`../RELEASING.md`](../RELEASING.md), the maintainer's procedure, ends with
+a table that names, for each block of its commands, the step of this stage
+that ran it, or says that only a real PubDex release runs it and which test
+covers it instead. `tests/test_releasing_guide.py`, in stage 1, checks that
+each block has its row, in order, and that the steps a row names exist and
+run the block's `release.sh` command, every option that differs being named
+in the row.
+
+On the machine of its local record the stage took about 27 seconds with
+Docker's build cache warm, as it is in the suite, where stages 6, 7 and 9
+have built the same images before; with an empty cache the first build adds
+the images' complete build.
+
+**Cleanup.** Every image of the run carries the label
+`org.opencontainers.image.version=<its version>`, a version no other run
+uses. On every exit, and after SIGINT, SIGTERM or SIGHUP, the stage removes
+the containers of the run — the probes of `release.sh`, which carry that
+label, and the SBOM tool's, which mount the run's directory — both local
+tags, every image with the label, the first build's as well as the
+second's, and the run's temporary directory, and confirms it as stage 6
+does. The base images, the SBOM tool and the build cache stay. No test
+release is kept for a later stage: a stage that needs one builds its own,
+and BuildKit's cache makes a second build of the same content take seconds.
+
+## Upgrades between PubDex releases on Compose
+
+`../run_upgrade_acceptance.sh` is stage 11 of `../run_ci_suite.sh`. It
+carries out, on the Compose deployment, the upgrades and rollbacks an
+operator carries out between PubDex releases, with the operator's commands.
+`release.sh` builds three test releases of the checkout, each under a
+version reserved for test releases with a name of the run's own, and
+verifies each:
+
+- **A**, the checkout as it is (`--test a<run>`);
+- **B1**, a copy of the checkout with the test-only overlay of
+  `tests/release_overlay/` (`--test b1<run> --overlay b1`): the schema
+  change `compatible.sql`, numbered after the checkout's last one — a new
+  table with its sequence and a nullable column on `biblio.publications`,
+  declared backward compatible — and a new transform version, the
+  checkout's with the suffix `+test`;
+- **B2**, the same with the overlay `b2`, which also adds `incompatible.sql`
+  after it: a rename of `biblio.publications_canon_web.title` to
+  `test_overlay_title`, declared not backward compatible. `application.py`
+  adapts only B2's temporary readiness and listing queries to select the new
+  name as `title`. A retains its real dependency on the original column.
+
+The overlay is applied to a copy in `release.sh`'s temporary directory and
+never to the working tree. The copy keeps every file's and directory's mode
+and every file's extended attributes, so BuildKit's cache serves what the
+overlay leaves unchanged and B1 and B2 build in seconds once A has.
+
+Each stack lives in an operator's directory of the run's own: the
+deployment files the application image in use carries, taken out of it with
+the command of `DEPLOYMENT.md`, *Selecting a published image*, an `.env`
+file naming the project, both images and the read service's port, and the
+secret files `create_secrets.sh` writes. A switch to other images is
+`docker compose down`, the other application image's deployment files, the
+two images in `.env`, and `docker compose up --wait`, whose schema upgrade
+brings the database to the schema of the images in use. Then:
+
+1. **A to B1.** A on empty volumes; `docker compose run --rm demo`; the
+   publication served over HTTP, every row stamped with A's transform
+   version. A backup with the command of `DEPLOYMENT.md`, *Backup and
+   restore*. The switch to B1: its schema upgrade applies the one schema
+   change it adds and records it as backward compatible, and B1 is ready
+   and serves the publication. The demonstration's payloads ingested again:
+   every row carries B1's transform version.
+2. **The image rollback to A.** The schema stays: A's schema upgrade
+   reports B1's backward-compatible change and has nothing to do, A is
+   ready, serves the publication, and its ingestion writes on B1's schema,
+   stamping A's transform version again.
+3. **A to B2.** On the same stack, B2's schema upgrade applies only the
+   change that is not backward compatible, records it as such, and B2
+   serves the publication through its changed SQL interface. Its ingestion
+   and refresh also work. The title and year are then changed after the
+   backup, and the changed snapshot values checked.
+4. **A refuses B2's schema.** A's actual readiness query, executed directly
+   as its application role without the schema guard, fails with
+   `UndefinedColumn` (SQLSTATE 42703) on `title`, independently establishing
+   the structural incompatibility. Switched back to A's images, A's schema
+   upgrade exits 1 with its refusal in `docker compose logs schema-upgrade`,
+   so `docker compose up --wait` fails and the read service does not start.
+   Started alone (`--no-deps`), the read service answers `/readyz` and
+   `/v0/publications` with 503 and the reason `schema_not_supported`, naming
+   the change, and `/livez` with 200; an ingestion command exits 1 with the
+   message and writes nothing.
+5. **The rollback by restore.** `docker compose down --volumes`, then the
+   restore of *Backup and restore* brings the backup of step 1 into a new
+   volume with A's images: the schema upgrade finds the dump's record and
+   nothing to do, the verification query counts what it counted before the
+   dump, the rows carry A's transform version, and the publication is
+   served with its original title and year restored.
+6. **The published releases to A.** For the preceding release, and for the
+   floor once it is another release (`DB/release_record.py preceding` and
+   `floor`): its images by the digests of the release record, pulled
+   without credentials when Docker lacks them, with the `compose.yaml` its
+   application image carries; the demonstration, its rows stamped with the
+   transform version its record names; a backup; the switch to A, whose
+   schema upgrade applies A's schema changes to that database; and the
+   image rollback to the published images, which serve the publication on
+   the upgraded schema.
+
+Every step but the reads — HTTP requests, the verification query, the
+record of schema changes and the rows' transform versions read as the
+superuser on PostgreSQL's socket, the containers' state and logs — is a
+command of the operator's. Starting the read service and an ingestion
+command without the schema upgrade, in step 4, shows the application's own
+check, which an operator meets only when starting them by hand. No password
+of the run occurs in any output it keeps or prints.
+
+**Isolation and cleanup.** Every stack is a Compose project
+`pubdex-upgrade-<run>-…`, never `db`; a project of that name that exists
+already stops the run. A `compose.override.yaml` of the run's own, which
+Compose reads with `compose.yaml`, puts the run label on every service,
+volume and network. PostgreSQL is published on no host port, which the run
+checks after every start, and the read service on 127.0.0.1 alone. Every
+Docker command, `release.sh`'s and the pulls included, uses the run's own
+client configuration, as in stage 10. On every exit, and after SIGINT,
+SIGTERM or SIGHUP, the stage runs `docker compose down --volumes` in each
+operator's directory, removes what carries a project's name or the run
+label, the test releases' images and containers, and the temporary
+directory with the secret files and the dumps, and confirms it as stage 6
+does. The published images, base images, the SBOM tool and the build cache
+stay.
+
+[`../DEPLOYMENT.md`](../DEPLOYMENT.md), *Upgrading to a new release*, ends
+with a table that names, for each block of its commands, the steps above
+that ran it. `tests/test_deployment_guide.py`, in stage 1, checks that each
+block has its row, in order; that the steps a row names exist, are the
+steps this section numbers and the script's section comments number
+alike, and run one of the block's commands; and that every `docker`
+command of the block is one those steps run, word for word and in order,
+the run's own options allowed between the words.
+
+On the machine of its local record the stage took about 130 seconds with
+Docker's build cache warm and the published images present: the three test
+releases about 35 seconds, each switch between images 8 to 13 seconds.
+While the floor is the preceding release, as for PubDex 0.2.0, whose floor
+and preceding release are both 0.1.0, step 6 runs once. Not covered: an
+upgrade from a PubDex release between the floor and the preceding one, a
+rollback to a PubDex release other than the one upgraded from, which is not
+supported, and a rollback by restore after an upgrade from a published
+PubDex release, whose schema changes have all been backward compatible so
+far.
 
 ## Running the suite elsewhere
 
@@ -1632,20 +2252,24 @@ missing part where it can tell, not everywhere:
 
 | The runner provides | Because | Without it |
 |---|---|---|
-| Linux on x86_64 | stages 6 and 7 build the application image for the platform of the runner's Docker daemon, and only `linux/amd64` is built, tested and supported ([`DEPLOYMENT.md`](../DEPLOYMENT.md), *Supported platforms*) | only stage 9 checks it, and refuses any other platform before it creates anything; on another architecture the suite has never run, and stages 6 and 7 would test an image of another platform, which is not supported |
+| Linux on x86_64 | stages 6 and 7 build the application image for the platform of the runner's Docker daemon, and only `linux/amd64` is built, tested and supported ([`DEPLOYMENT.md`](../DEPLOYMENT.md), *Supported platforms*) | only stages 9-11 check it, and refuse any other platform before they build anything; on another architecture the suite has never run, and stages 6 and 7 would test an image of another platform, which is not supported |
 | Bash and standard POSIX tools (`od`, `mktemp`, `awk`, `sed`, `grep`, `seq`) | the scripts are Bash | the scripts fail; `timeout(1)` is optional, and where it is missing two offline lifecycle tests skip under the skip policy |
+| GNU tar, gzip, `sha256sum` and `cmp` | `release.sh`, which stages 9-11 run, writes the source archive with GNU tar's reproducible options and gzip, and the checksum file with `sha256sum`; stage 10 compares its two builds with `cmp` | `release.sh`, and stage 10 before it, stops before it builds anything and names the tool |
 | Python 3.11 with `.venv` at the repository root created by `./setup_venv.sh`: pip from `DB/requirements-pip.txt` and `DB/requirements-dev.txt`, fetched by `DB/fetch_verified.py` and installed from those files alone; for psycopg's C implementation, the default, a C compiler, Python's headers and libpq's headers with `pg_config` (`libpq-dev`), else `--psycopg python`; a system libpq 16 or later either way | every Python step runs `.venv/bin/python`; the setup is the one CI and the image build use | the suite stops before stage 1 and says how to create it; `setup_venv.sh` stops at a missing compiler or `pg_config`, and `DB/install_locked.py` at a libpq older than 16 |
 | A Git checkout, and for `--base`/`--head` its complete history | the publishable file list comes from Git, and the range checks read commits | without a checkout the suite stops before stage 1; in a shallow clone stage 2 cannot read the commits and fails with status 2 |
-| A Docker Engine 28.0.1 or later, except 28.2.0 to 28.3.2, with the buildx plugin, that the job's user can use | stages 3–7 start containers, stages 6 and 7 build the application image with BuildKit and start the deployment, which is supported on those Engines only: older ones start it too, but let other hosts reach the ports it publishes on 127.0.0.1 (`DB/lib/docker_versions.sh`) | the suite stops before stage 1 and says which; without buildx, `build_image.sh` stops stage 6 and says what to install |
-| The Docker Compose plugin 2.24.0 or later (`docker compose`) | stages 6 and 7 start the Compose deployment, whose health checks set `start_interval` | the suite stops before stage 1 and says what to install |
-| A daemon that sees the checkout's directory and the temporary directory under the same paths | stages 3–5 bind-mount `DB/init/` into the container; stages 6 and 7 take the schema from the image and bind-mount only their secret files from the temporary directory, and stage 7 its roster; stage 9's floor cluster mounts its audit policy from the temporary directory into its node | the container initialises without the schema, and stage 3 stops at once and names this requirement; in stages 6 and 7 a secret file is missing and the stack does not start; in stage 9 the floor's API server does not start and step 22 fails |
-| Ports that daemon publishes on 127.0.0.1 reachable from the job | stages 4 and 5 connect to the database on such a port, stages 6 and 7 to the read service | the first database connection of stage 4 is refused |
+| In that history, the commit whose `charts/pubdex/` is the chart of the preceding PubDex release, which the release record names | stage 9 installs that chart as revision 1 of each upgrade, read with `git archive` | stage 9 stops before it creates anything and says that a shallow clone lacks the commit |
+| A Docker Engine 28.0.1 or later, except 28.2.0 to 28.3.2, with the buildx plugin, that the job's user can use | stages 3–7 start containers, stages 6 and 7 build the application image with BuildKit and start the deployment, stages 9-11 build both images and their test releases with BuildKit, and stage 11 starts the deployment too, which is supported on those Engines only: older ones start it too, but let other hosts reach the ports it publishes on 127.0.0.1 (`DB/lib/docker_versions.sh`) | the suite stops before stage 1 and says which; without buildx, `build_image.sh` stops stage 6 and says what to install |
+| The Docker Compose plugin 2.24.0 or later (`docker compose`) | stages 6, 7 and 11 start the Compose deployment, whose health checks set `start_interval` | the suite stops before stage 1 and says what to install |
+| A daemon that sees the checkout's directory and the temporary directory under the same paths | stages 3–5 bind-mount `DB/init/` into the container; stages 6, 7 and 11 take the schema from the image and bind-mount only their secret files from the temporary directory, and stage 7 its roster; stage 9's floor cluster mounts its audit policy from the temporary directory into its node; the SBOM tool of `release.sh`, in stages 9-11, reads the saved images from a bind mount of the run's temporary directory | the container initialises without the schema, and stage 3 stops at once and names this requirement; in stages 6 and 7 a secret file is missing and the stack does not start; in stage 9 the floor's API server does not start and step 28 fails; `release.sh` fails at its SBOM step |
+| Ports that daemon publishes on 127.0.0.1 reachable from the job | stages 4 and 5 connect to the database on such a port, stages 6, 7 and 11 to the read service | the first database connection of stage 4 is refused |
 | The `postgres:16` image, from the daemon's cache or a registry it can reach | the disposable databases | `docker run` fails in stage 3; another image can be named (*Reproducing a verified run*) |
-| The images `compose.yaml` and the `Dockerfile` name by digest, and the Python packages of `DB/requirements-pip.txt` and `DB/requirements.txt`, from the daemon's cache or the registry and package index they come from | stages 6 and 7 build the image and start the stack | the build or `docker compose up` fails in stage 6 |
+| The base images the `Dockerfile` and `postgres.Dockerfile` name by digest, the Python packages of `DB/requirements-pip.txt` and `DB/requirements.txt`, and PostgreSQL's source, from the daemon's cache or the registry, package index and postgresql.org they come from | stages 6, 7 and 9-11 build the images | the build fails in stage 6 |
 | The pinned helm, kubectl and kind under `.tools/`, which `./setup_cluster_tools.sh` installs over HTTPS from `get.helm.sh`, `dl.k8s.io` and `kind.sigs.k8s.io`, whose download of kind redirects to the kind project's release storage on GitHub | stages 8 and 9 use only these, never a helm, kubectl or kind on `PATH` or preinstalled on the runner | the suite stops before stage 1 and names the command that installs them; a tool of another hash or version stops its stage |
+| The pinned SBOM tool, Syft's image by the digest `DB/lib/sbom_tool.sh` pins, which `./release.sh setup` pulls from Docker Hub without credentials | stages 9, 10 and 11 write an SBOM of each image of their test releases with it, never with a Syft on `PATH` | the suite stops before stage 1 and names the command; an image of another id stops `release.sh` before it builds anything |
+| The published images of the preceding PubDex release and of the upgrade floor, by the digests the release record names, from the daemon's cache or, without credentials, their registry | stage 11 starts them on Compose and upgrades them to test release A | stage 11 fails at the pull and names the image; the upgrade from the published images is never skipped |
 | `openssl` | stage 9 creates the CA and the certificate of its external PostgreSQL server | stage 9 stops before it creates anything |
-| A Docker daemon that can run kind's node, a privileged container, and publishes the cluster's API server on 127.0.0.1, reachable from the job | stage 9 creates its clusters, one at a time, as containers of that daemon and talks to each through that port | kind fails in step 2 or 22, or the kubeconfig check refuses the cluster before any kubectl or helm call reaches it |
-| The two kind node images by digest, from the daemon's cache or Docker Hub; from inside the clusters' nodes, without credentials, the registry of the published images, `ghcr.io` | stage 9's clusters, and revision 1 of every release, which runs the published images | step 2 or 22 fails to create a cluster, or step 3 fails and names the registry, or on the floor the install of step 26 does not become ready; the upgrade from the published images is never skipped |
+| A Docker daemon that can run kind's node, a privileged container, and publishes the cluster's API server on 127.0.0.1, reachable from the job | stage 9 creates its clusters, one at a time, as containers of that daemon and talks to each through that port | kind fails in step 2 or 28, or the kubeconfig check refuses the cluster before any kubectl or helm call reaches it |
+| The two kind node images by digest, from the daemon's cache or Docker Hub; from inside the clusters' nodes, without credentials, the registry of the published images, `ghcr.io` | stage 9's clusters, and revision 1 of every release, which runs the published images | step 2 or 28 fails to create a cluster, or step 3 fails and names the registry, or on the floor the install of step 32 does not become ready; the upgrade from the published images is never skipped |
 
 These hold where the job runs directly on a machine with its own Docker
 Engine: a workstation or VM, GitHub's hosted Ubuntu runners, a self-hosted
@@ -1686,6 +2310,11 @@ What has been demonstrated, and what has not:
   task-2b commit `a86d5e0` before it was committed and from a clean clone
   of that commit ([`TASK_2B.md`](../TASK_2B.md), *Local verification
   record*);
+  all eleven stages on the working tree on 2026-11-24, with Python
+  3.11.17, including the schema upgrade, test-release rehearsal and upgrades
+  and rollbacks on Compose and Kubernetes ([`TASK_2C.md`](../TASK_2C.md),
+  *Local verification record*; the final candidate's clean clone, public CI
+  and publication remain pending);
   and there, the three script lines the GitLab example below had then —
   without its installation of pip — run by hand with the variables of a
   branch's first push, on the five-stage suite of task 1b. On Forgejo,
@@ -1706,7 +2335,7 @@ What has been demonstrated, and what has not:
   Python 3.11.18 and psycopg's C implementation for task-2b commit
   `a86d5e0` on 2026-11-17, in a pull-request run and in the push run on
   `main` ([`TASK_2B.md`](../TASK_2B.md), *Public-CI evidence*).
-- **Not demonstrated:** the nine stages on Forgejo — its workflow has run
+- **Not demonstrated:** the eleven stages on Forgejo — its workflow has run
   seven at most; a GitLab pipeline — the GitLab
   example has not run as one; a run on a Forgejo instance anyone can
   inspect — the Forgejo runs were on a private one; any architecture other
@@ -1721,6 +2350,7 @@ verify:
   script:
     - ./setup_venv.sh --python python3.11
     - ./setup_cluster_tools.sh
+    - ./release.sh setup
     - ./run_ci_suite.sh --base "${CI_MERGE_REQUEST_DIFF_BASE_SHA:-$CI_COMMIT_BEFORE_SHA}" --head "$CI_COMMIT_SHA"
 ```
 
@@ -1737,13 +2367,17 @@ the variables of a branch's first push set by hand. Those were three lines
 that created `.venv` and installed into it; the installation of the pinned
 pip came later, and since then all of it has become the one line of
 `./setup_venv.sh`, which downloads the locked files itself and lets pip
-install only from them. The lines of now have not run that way. That shows
+install only from them; the lines that install the pinned cluster tools and
+pull the pinned SBOM tool came with the stages that need them. The lines of
+now have not run that way. That shows
 the commands work on a machine that meets the contract; it is not a GitLab
 pipeline run. Whether GitLab accepts the file, and whether a shell-executor
 runner's checkout, Python installation and access to Docker meet the
 contract, remain unverified. Without a commit range the job reduces to the
 steps every runner shares: install the requirements and the pinned cluster
-tools, then run `./run_ci_suite.sh`.
+tools, pull the pinned SBOM tool, then run `./run_ci_suite.sh`. Like the
+two workflows, the example has no step that publishes and names no
+credential.
 
 ### Forgejo Actions
 
@@ -1754,10 +2388,12 @@ read `.forgejo/`, so each forge runs its own adapter and neither runs the
 other's. On every push and pull request the job checks the repository out
 with its complete history and without stored credentials, creates `.venv`
 with `./setup_venv.sh --python python3.11`, installs the pinned helm,
-kubectl and kind with `./setup_cluster_tools.sh`, and runs
+kubectl and kind with `./setup_cluster_tools.sh`, pulls the pinned SBOM tool
+with `./release.sh setup`, and runs
 `./run_ci_suite.sh --base <event base> --head <event commit>` under a
-40-minute limit: the same three steps and the same limit as on GitHub, and
-nothing else.
+60-minute limit: the same four steps and the same limit as on GitHub, and
+nothing else. Like that job it publishes nothing and reads no repository
+secret.
 
 It runs on a Forgejo Runner that has the label `pubdex-ci-host:host`, so the
 job executes directly on the runner's machine. That machine has to meet the
@@ -1788,20 +2424,26 @@ Where it differs from the GitHub adapter, and why:
   the workflow sets none. Forgejo's automatic token can write to the
   repository, is limited to it and to the run, and is present in every
   step's environment; `persist-credentials: false` keeps it out of the
-  checkout.
+  checkout, and no step of the job or script of the suite reads it.
 - **Ending a job.** Forgejo Runner ends a job that is cancelled or reaches
   its time limit with SIGKILL, which no cleanup can intercept: the
   Docker-backed stage running at that moment leaves its container and volume
   behind, and their labels find them (*Isolation and cleanup*); in stage 9,
   its kind cluster `pubdex-cluster-<run id>`, the network `<cluster>-net`
-  and the image tags it created.
+  and the image tags it created; in stages 9 to 11, the images of their
+  test releases, which carry the test release's version as a label, and
+  the temporary directory; and in stage 11 also its Compose projects
+  `pubdex-upgrade-<run>-…`, with the run label
+  `pubdex.upgrade-acceptance.run`.
 
 At run time the job needs the Forgejo instance, `data.forgejo.org` for the
-action, the Python package index, the downloads of the cluster tools, and
-the registry of the `postgres:16` image, of the two images stages 6 and 7
-name by digest and of kind's two node images unless the Docker daemon has
-them already; and from inside kind's nodes, `ghcr.io`, the registry of the
-published images. For stages 6 and 7 the runner's machine needs Docker
+action, the Python package index, the downloads of the cluster tools,
+Docker Hub for the SBOM tool's image, which `./release.sh setup` pulls, and
+the registry of the `postgres:16` image, of the base images the two
+Dockerfiles name by digest and of kind's two node images unless the Docker
+daemon has them already; and `ghcr.io`, the registry of the published
+images, from the runner's daemon for stage 11 and from inside kind's nodes
+for stage 9. For stages 6, 7 and 9-11 the runner's machine needs Docker
 Engine 28.0.1 or later, except 28.2.0 to 28.3.2, with the buildx plugin and
 the Compose plugin 2.24.0 or later, and for stage 9 a daemon that runs
 kind's node, as the contract above says. Two of these are GitHub's: kind's
@@ -1815,9 +2457,11 @@ What has been checked, without a Forgejo instance:
 expressions evaluated against synthetic contexts carrying the fields of
 Forgejo's events for a push, the first push of a branch and a pull request
 whose target branch has moved past the merge base, and proves that they
-install the requirements and hand the suite the expected range; it also pins
-the label, the source and commit of the action, and the same checkout commit,
-setup and time limit as the GitHub workflow. The schema check of Forgejo Runner
+install the requirements, pull the SBOM tool and hand the suite the expected
+range; it also pins the label, the source and commit of the action, the same
+checkout commit, setup and time limit as the GitHub workflow, and that the
+job's commands are the four above and no other, with no secret, token or
+login named. The schema check of Forgejo Runner
 13.2.0 (`forgejo-runner validate`) accepts the workflow.
 
 What has run on a Forgejo instance: on 2026-10-06, on a private Forgejo
@@ -1848,8 +2492,10 @@ to the host:
 | pip | `./setup_venv.sh`, in both workflows and every documented setup: pip 26.2.2 by `DB/install_pip.py` from its hash-checked wheel, then the lock by `DB/install_locked.py`, pip with `--no-index` from the files `DB/fetch_verified.py` fetched, without the host's pip configuration and, where the host permits a network namespace, without network | whether the host permits that namespace; the setup's log says |
 | Python | the GitHub workflow uses 3.11.18, the Python of the application image | elsewhere, the Forgejo workflow included, the `python3.11` the host has; nothing checks its patch version |
 | PostgreSQL | stages 3–5: nothing by default, `postgres:16` follows the newest 16.x image; stages 6 and 7: the PubDex PostgreSQL image, built from the checkout by `postgres.Dockerfile` — PostgreSQL 16.15 from its source by hash, without XML | `DISPOSABLE_PG_IMAGE` names the image of stages 3–5 — the PubDex PostgreSQL image built with `./build_image.sh`, say — `SMOKE_PG_IMAGE`, `TASK_1A_PG_IMAGE` and `INTEGRATION_PG_IMAGE` that of one, a digest included |
-| The images of stages 6 and 7 | the `Dockerfile` and `postgres.Dockerfile`: their bases by digest, every locked file and the PostgreSQL source by hash, downloaded in a stage of their own by `DB/fetch_verified.py` and installed and compiled without network; the build time is in their labels | Debian's packages, from its signed archive at build time, and the package index and postgresql.org serving the files; a file that matches no hash fails the build; `--image` and `--postgres-image` test given images instead |
-| helm, kubectl, kind and the cluster of stage 9 | `DB/lib/cluster_tools.sh`: helm 4.3.1, kubectl 1.36.6 and kind 0.33.0 by SHA-256, installed by `./setup_cluster_tools.sh`; kind's two node images, Kubernetes 1.37.0 and 1.35.8 with their network plugin, by digest; the published images of the first revision by digest in `charts/pubdex/values.yaml` | the kernel and Docker Engine the nodes run on |
+| The images of stages 6 and 7 | the `Dockerfile` and `postgres.Dockerfile`: their bases by digest, every locked file and the PostgreSQL source by hash, downloaded in a stage of their own by `DB/fetch_verified.py` and installed and compiled without network; the build time is in their labels | Debian's packages, from its signed archive when the step that installs them runs, otherwise from the host's build cache, and the package index and postgresql.org serving the files; a file that matches no hash fails the build; `--image` and `--postgres-image` test given images instead |
+| helm, kubectl, kind and the cluster of stage 9 | `DB/lib/cluster_tools.sh`: helm 4.3.1, kubectl 1.36.6 and kind 0.33.0 by SHA-256, installed by `./setup_cluster_tools.sh`; kind's two node images, Kubernetes 1.37.0 and 1.35.8 with their network plugin, by digest; the preceding PubDex release, revision 1 of every upgrade, by the digests of its images in the release record (`releases/`) and its chart at the commit the record names | the kernel and Docker Engine the nodes run on |
+| The SBOM tool and the test releases of stages 9-11 | Syft's image by digest (`DB/lib/sbom_tool.sh`), pulled by `./release.sh setup` and run without network; each test release's version is new on every run, its source archive and chart package are the same, byte for byte, when built again from the same files with the same GNU tar, gzip and helm | the images' bytes, whose labels record the build's time; the host's tar and gzip, which the provenance record names |
+| The published images of stage 11 | the preceding PubDex release's and the floor's, by the digests of the release record | — |
 | GitHub actions and runner | actions by commit, runner image `ubuntu-24.04` | the runner image itself still receives updates |
 | Forgejo action and runner | the checkout action by commit | the runner, its machine and its Node.js |
 | Kernel, Docker Engine, Docker Compose, Bash, Git, system tools | — | always the host's |
@@ -1894,9 +2540,37 @@ report shows where it differs. Bit-for-bit reproduction is not claimed.
   repository root: it is exactly what public CI runs. With `--base <the
   commit your work starts from>` it also checks the commits you are about to
   push, as CI will.
-- For a narrower loop after a change to `DB/init/`, the ingestion path or the
-  export, run `./run_migration_smoke.sh`, `./run_task_1a_demo.sh` or
-  `./run_disposable_integration.sh` on their own; after a change to the
-  image, `compose.yaml` or the service, `../run_stack_acceptance.sh`.
+- For a narrower loop after a schema change in `DB/schema/`, a change to
+  the ingestion path or the export, run `./run_migration_smoke.sh`,
+  `./run_task_1a_demo.sh` or `./run_disposable_integration.sh` on their
+  own; after a change to the image, `compose.yaml` or the service,
+  `../run_stack_acceptance.sh`; after a schema change, also
+  `../run_upgrade_acceptance.sh`; after a change to `../release.sh` or to
+  what a PubDex release holds, `../run_release_rehearsal.sh`.
 - Run at least one importer in `--dry-run` mode using a synthetic fixture.
 - If a change touches SQL assumptions, verify the target table/column exists before running a write command.
+
+## Release verification corrections
+
+Stage 1 runs `tests/test_verify_release.py` against synthetic downloads: all
+five required files, a missing file, corrupt bytes and a missing checksum
+entry, with `IMAGES` absent. This check needs only Python. It does not
+download from a release page. Saved-image fixtures cover matching and
+mismatched config digests for classic and containerd builder stores, plus
+the format-1 classic fallback and the explicit limitation of a legacy
+containerd record without a config digest. `tests/test_release_provenance.py`
+checks generation, digest mismatches and validation of both record formats.
+
+Provenance format 2 adds `images.<role>.config_digest` while retaining the
+store-dependent `id`. Stage 10 reads real saved-image config bytes during
+build and verification; its comparisons exclude config digests because
+creation labels change those bytes. Containerd archive behaviour is covered
+by fixtures and the [Engine export implementation](https://github.com/moby/moby/blob/v28.5.1/daemon/containerd/image_exporter.go),
+which requests a Docker-compatible `manifest.json`. A run on a classic-store
+daemon provides no runtime evidence for containerd.
+
+`tests/test_release_script.py` runs publication only against stubbed registries.
+It forces a write failure while creating the completion record, verifies
+cleanup with no `DIGESTS` marker left, and retries using both already-published
+matching images without another push. The final file must contain exactly
+two complete lines. Existing completion records are never overwritten.

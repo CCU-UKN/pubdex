@@ -90,6 +90,15 @@ docker compose -f compose.yaml up -d postgres
 docker compose -f compose.yaml up -d pgadmin
 ```
 
+On its first start PostgreSQL gives the database the baseline from `init/`.
+Bring it to the schema of this checkout with the schema upgrade, from the
+virtual environment `../setup_venv.sh` creates, as the superuser `.env`
+names; run it again after every update of the checkout, and see section 3.3:
+
+```bash
+../.venv/bin/python -m people_pubs.schema upgrade
+```
+
 ### 2.4 Verify health
 
 ```bash
@@ -175,6 +184,14 @@ By default, `restore_db.sh` now also:
 
 - applies `init/010_ingestion_runtime_schema.sql` after the dump restore
 - imports the timestamp-matched `people_curation_*.json` when present
+
+The development helper restores ownership as `--db-user` (normally
+`postgres`) with `--no-owner`, while retaining the dump's role and default
+privileges. The roles referenced by the backup must already exist or be
+restored from globals. This includes both application roles' read-only
+access to the schema record; an already recorded change is not replayed to
+repair grants. The canonical Compose procedure retains ownership too and
+does not apply the baseline patch.
 
 Use `--no-runtime-schema-patch` or `--no-curation` only when you intentionally
 want to skip those steps.
@@ -277,9 +294,10 @@ or need to repair an already-restored database in place.
 
 ## 3.3 Migration Model And Re-Run Safety
 
-There is deliberately no migration-version table; the model is two schema
-files with different contracts, a small idempotent addition, and a
-first-start script:
+The files of `init/` are the baseline, the schema of PubDex 0.1.0, and never
+change again: two schema files with different contracts, a small idempotent
+addition, and a first-start script. Every later change of the schema is a
+schema change in `schema/`, which the schema upgrade applies and records:
 
 - `init/000_init.sql` — **bootstrap-only, not re-runnable.** It contains bare
   `CREATE TABLE`/`CREATE TYPE` statements and must only ever run against an
@@ -290,17 +308,15 @@ first-start script:
 - `init/010_ingestion_runtime_schema.sql` — **convergent, but not atomic and
   not transparent to a serving database** (contract corrected 2026-07-10;
   previously documented as "safe to re-apply at any time"). Its *end state*
-  is idempotent (`IF NOT EXISTS` / `CREATE OR REPLACE` throughout), and this
-  is the only file that evolves an existing database — `restore_db.sh`
-  re-applies it automatically after every restore. However, the file runs
-  statement-by-statement under `psql` with no enclosing transaction, and it
+  is idempotent (`IF NOT EXISTS` / `CREATE OR REPLACE` throughout), and
+  `restore_db.sh` re-applies it automatically after every restore. However,
+  the file runs statement-by-statement under `psql` with no enclosing transaction, and it
   drops and recreates the serving view chain (`publications_clean` →
   `publications_canon` → `publications_canon_web`) and both materialized
   snapshots mid-file. **Re-apply it to a live, serving database only in a
   maintenance window.** If an apply fails partway, the database can be left
   without serving views until the patch is re-run to completion (run with
-  `-v ON_ERROR_STOP=1`, fix the cause, re-apply — it converges). A
-  transactional/phased migration mechanism remains an open backlog choice.
+  `-v ON_ERROR_STOP=1`, fix the cause, re-apply — it converges).
 - `init/011_member_info_manual.sql` — **idempotent** (`IF NOT EXISTS`): the
   table of curated member information. The image runs it on the first start,
   after `000` and `010`; an older database receives it when the file is
@@ -315,18 +331,27 @@ first-start script:
   deployment, its `set_passwords.sh` hands it new passwords on standard input
   (`--stdin`) ([`../DEPLOYMENT.md`](../DEPLOYMENT.md), "Changing a
   password").
+- `schema/NNNN_<name>.sql` — **applied once each, in number order, each in
+  a transaction of its own**, by the schema upgrade, `python -m
+  people_pubs.schema upgrade` (`status` reports without changing anything).
+  It records each change in the table `pubdex.schema_changes`, which `0001`
+  creates, and applies only what is not recorded, so a second run changes
+  nothing; a change that fails is rolled back whole. Its rules and messages
+  are in [`people_pubs/schema.py`](people_pubs/schema.py).
 
-To verify the bootstrap and convergence claims against the current files, run
-the migration smoke test (disposable Docker container; never touches a real
-database):
+To verify the bootstrap, schema upgrade and convergence claims against the
+current files, run the migration smoke test (disposable Docker container;
+never touches a real database):
 
 ```bash
 ./run_migration_smoke.sh
 ```
 
 It bootstraps an empty PostgreSQL from `init/`, asserts the expected tables,
-views, and `pii.*` functions exist, re-applies the `010` patch, and asserts
-everything is still in place. Note what it proves: final-state repeatability
+views, and `pii.*` functions exist, applies the schema upgrade twice -- the
+second time with nothing left to do -- and checks the record and the roles'
+privileges, re-applies the `010` patch, and asserts everything is still in
+place. Note what it proves: final-state repeatability
 on an empty database — it does not exercise mid-apply failure or concurrent
 readers (hence the maintenance-window rule above).
 

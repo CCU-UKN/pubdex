@@ -4,7 +4,7 @@
   "description": "Every key of values.yaml with its type and form. Unknown keys are refused at every level, so a mistyped key fails instead of being ignored, and no key can carry a password.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["mode", "image", "postgresImage", "imagePullSecrets", "nodeSelector", "tolerations", "affinity", "podAnnotations", "podLabels", "priorityClassName", "secrets", "database", "postgresql", "externalDatabase", "api", "ingestion", "demo", "ingress", "networkPolicy"],
+  "required": ["mode", "image", "postgresImage", "imagePullSecrets", "nodeSelector", "tolerations", "affinity", "podAnnotations", "podLabels", "priorityClassName", "secrets", "database", "postgresql", "externalDatabase", "schemaUpgrade", "api", "ingestion", "demo", "ingress", "networkPolicy"],
   "allOf": [
     {
       "description": "Evaluation mode runs its own server: a host or a CA certificate of another one contradicts it.",
@@ -181,6 +181,14 @@
             "resources": {"$ref": "#/$defs/resources"}
           }
         }
+      }
+    },
+    "schemaUpgrade": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["resources"],
+      "properties": {
+        "resources": {"$ref": "#/$defs/resources"}
       }
     },
     "api": {
@@ -514,7 +522,7 @@
           "pattern": "^([A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?$"
         },
         "digest": {
-          "description": "Image digest; empty to pull by tag.",
+          "description": "Image digest; empty by default. Set both image digests from the release record before installing; a tag can be moved.",
           "type": "string",
           "pattern": "^(sha256:[0-9a-f]{64})?$"
         },

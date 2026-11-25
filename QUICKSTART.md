@@ -31,7 +31,8 @@ reproducible command:
 
 It creates its own disposable PostgreSQL container — unique name, loopback-only
 port, removed again afterwards, never Docker Compose — bootstraps the schema
-from `DB/init/`, imports the synthetic roster, ingests the bundled ORCID
+from `DB/init/` and applies the schema upgrade, imports the synthetic roster,
+ingests the bundled ORCID
 payload, enriches the same work from the bundled Crossref payload, queries both
 the stored record and the canonical list, produces the export and verifies its
 contents. It makes no ORCID, Crossref or other metadata-provider request: its
@@ -118,6 +119,17 @@ system's libpq, which needs a C compiler and libpq's headers (`libpq-dev`).
 Without them, `./setup_venv.sh --psycopg python` installs psycopg's
 pure-Python implementation, which loads the system's libpq (16 or later)
 at run time.
+
+`DB/init/` gave the database the baseline, the schema of PubDex 0.1.0. The
+schema upgrade brings it to the schema of your checkout: it applies, in
+order, each schema change of `DB/schema/` that the database has not had yet,
+as the superuser `DB/.env` names, and records it in `pubdex.schema_changes`.
+Run it now and after every update of your checkout; a run with nothing to
+do changes nothing:
+
+```bash
+(cd DB && ../.venv/bin/python -m people_pubs.schema upgrade)
+```
 
 Run the default offline check suite once now — it needs no database and no
 network:

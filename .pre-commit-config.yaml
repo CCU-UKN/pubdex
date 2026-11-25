@@ -6,7 +6,7 @@ repos:
       # Docker-backed commands (migration smoke, acceptance demonstration,
       # integration suite) stay out of the commit path on purpose.
       - id: offline-checks
-        name: Default offline check suite (compile, markdown links, offline tests, transform guard)
+        name: Default offline check suite (compile, markdown links, release notes, version guard, offline tests, transform guard)
         entry: ./run_checks.sh --staged
         language: system
         pass_filenames: false

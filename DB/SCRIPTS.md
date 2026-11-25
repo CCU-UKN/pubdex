@@ -60,6 +60,12 @@ MAILTO=ops@example.org
 ### DB restore helper
 `DB/restore_db.sh`
 - Restore `people_db` from backups in `DB/backups` (latest dump by default).
+- This development helper uses `--no-owner`: restored objects belong to
+  `--db-user` (normally the superuser `postgres`). It retains the dump's
+  privileges, including default privileges and read-only access by both
+  application roles to `pubdex.schema_changes`. Referenced roles must exist
+  already or be restored from the globals file. It does not replay released
+  schema changes to repair grants.
 - Supports explicit files via `--dump`/`--globals`/`--curation`,
   auto-applies `init/010_ingestion_runtime_schema.sql` after restore by
   default, and imports the timestamp-matched `people_curation_*.json` when
@@ -70,6 +76,13 @@ MAILTO=ops@example.org
 ```
 ./restore_db.sh -y
 ```
+
+The canonical Compose restore in `../DEPLOYMENT.md` retains both ownership
+and privileges and does not reapply the baseline patch. Its procedure is
+separate. `./run_disposable_integration.sh` exercises this development helper
+with an explicit disposable container and synthetic dump, with globals,
+curation, configuration loading and backup discovery disabled, then checks
+restored values, the schema record, ownership, schema support and role boundaries.
 
 ### DB role password sync helper
 `DB/sync_db_role_passwords.sh`
@@ -209,6 +222,72 @@ docker compose up --wait                         # the one command that starts t
 ./run_operator_acceptance.sh
 ./run_operator_acceptance.sh --image ghcr.io/ccu-ukn/pubdex:<version> \
   --postgres-image ghcr.io/ccu-ukn/pubdex-postgres:<version>   # in a clone at its commit
+```
+
+### Schema upgrade
+`python -m people_pubs.schema upgrade|status` (`people_pubs/schema.py`)
+- `upgrade` applies, in number order, every schema change of `schema/` the
+  database has not had yet, each in a transaction of its own, and records
+  it in `pubdex.schema_changes`; a second run changes nothing. It runs as
+  the role that owns the PubDex schema, and refuses a database without the
+  baseline, with an edited schema change, or with a later PubDex release's
+  schema change that is not backward compatible. `status` reports the
+  recorded and the outstanding changes and changes nothing (exit status 3
+  when an upgrade would apply something).
+- `--wait <seconds>` waits for the server; `--lock-timeout <seconds>`
+  (upgrade) bounds the wait for another schema upgrade and for each lock.
+  It connects as the ingestion commands do. The Compose deployment runs it
+  as its one-shot service `schema-upgrade` at every `docker compose up`,
+  the Helm chart as a Job (`../DEPLOYMENT.md`, "Upgrading to a new release";
+  `../VERSIONING.md`, "Schema changes and the schema upgrade"; the rules for
+  writing a schema change: `../RELEASING.md`).
+```
+python -m people_pubs.schema status
+python -m people_pubs.schema upgrade
+```
+
+### Compose deployment: upgrades between PubDex releases
+`run_upgrade_acceptance.sh` (repository root)
+- Carries out, with an operator's commands, the upgrades and rollbacks of
+  the Compose deployment between PubDex releases, in Compose projects of
+  its own (`pubdex-upgrade-<run>-...`): `release.sh` builds test release A
+  of the checkout and test releases B1 and B2 with the test-only overlay;
+  A is upgraded to B1, a backward-compatible schema change, and rolled
+  back by swapping the images; then to B2, a schema change that is not
+  backward compatible, which A refuses, and rolled back by restoring the
+  backup; and the published preceding release, by the digests of the
+  release record, is upgraded to A and rolled back. Stage 11 of
+  `../run_ci_suite.sh`; details: `TESTING_STRATEGY.md`.
+```
+./run_upgrade_acceptance.sh
+```
+
+### PubDex releases: build, verify, publish, and their checks
+`release.sh`, `run_release_rehearsal.sh` (repository root);
+`DB/release_record.py`, `DB/check_release_notes.py`, `DB/check_version_guard.py`
+- `./release.sh build` builds the artifact set of a PubDex release — the
+  source archive, the Helm chart's package, both images, an SBOM of each,
+  the provenance record and the checksum file — into
+  `dist/pubdex-<version>/` and verifies it; `verify <dir>` checks such a
+  directory again; `setup` pulls the pinned SBOM tool once per machine;
+  `publish <dir> --repository-prefix <registry>/<namespace>` pushes the two
+  images, a step only the maintainer runs. `--test <name>` builds a test
+  release of the checkout as it is, which is never published.
+  `../RELEASING.md` is the procedure.
+- `./run_release_rehearsal.sh` rehearses a PubDex release with a test
+  release, publishing nothing: stage 10 of `../run_ci_suite.sh`.
+- `DB/release_record.py` reads the release record, `../releases/`
+  (`entry`, `field`, `preceding`, `floor`); `DB/check_release_notes.py`
+  checks the release notes of `VERSION` in `../CHANGELOG.md` against the
+  tree; and `DB/check_version_guard.py` refuses a tree that carries a
+  published version but ships other files. Both checks run in stage 1
+  (`../run_checks.sh`).
+```
+./release.sh setup
+./release.sh build --test try
+./run_release_rehearsal.sh
+python3 DB/release_record.py preceding
+.venv/bin/python DB/check_release_notes.py
 ```
 
 ### Stateful refresh runner (DB-backed staleness)

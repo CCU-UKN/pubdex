@@ -2,14 +2,17 @@
 
 The real script runs from a scratch copy of the checkout layout against a stub
 `docker` executable, which records every call and keeps an inventory of the
-containers and volumes it was asked to create, and a stub
-run_integration_tests.sh, which records its arguments and environment, prints
-its connection string and writes the JUnit report pytest would. That proves,
-without Docker and without touching any existing service, that the runner
-creates uniquely named resources carrying its own ownership label, never
-pre-deletes, publishes only a loopback port, binds every connection setting to
-the disposable database, keeps the password out of command lines and output,
-preserves the tests' exit status, fails on a skipped or empty run, and removes
+containers and volumes it was asked to create, a stub people_pubs.schema
+and a stub run_integration_tests.sh, which record their arguments and
+environment and print their connection string; the stub tests write the
+JUnit report pytest would. That proves, without Docker and without touching
+any existing service, that the runner creates uniquely named resources
+carrying its own ownership label, never pre-deletes, publishes only a loopback
+port, applies the schema upgrade once the database has bootstrapped and
+before the tests, binds every connection setting to the disposable database,
+keeps the password out of command lines and output, stops on a failed schema
+upgrade with its status, preserves the tests' exit status, fails on a skipped
+or empty run, and removes
 exactly what it created after success, failure, a timeout, a failed start, a
 failed bootstrap, an exited container or a signal -- also when a second signal
 arrives during the cleanup. A cleanup that fails -- a removal the daemon
@@ -160,6 +163,23 @@ sys.exit(config["statuses"][call])
 '''
 
 
+# Stands in for people_pubs.schema in the scratch checkout: records its
+# arguments and environment, prints its connection string -- which the
+# runner has to mask -- and exits with the configured status.
+STUB_SCHEMA = r'''
+import json, os, sys
+from pathlib import Path
+here = Path(__file__).resolve().parents[1]
+config = json.loads((here / "stub_tests_config.json").read_text(encoding="utf-8"))
+with open(config["events"], "a", encoding="utf-8") as fh:
+    fh.write("\x1f".join(["schema", *sys.argv[1:]]) + "\n")
+with (here / "stub_schema_runs.jsonl").open("a", encoding="utf-8") as fh:
+    fh.write(json.dumps({"argv": sys.argv[1:], "env": dict(os.environ)}) + "\n")
+print("schema: connecting with " + os.environ.get("PEOPLE_DB_DSN", "(no DSN)"))
+sys.exit(config["schema_status"])
+'''
+
+
 # Stands in for rm: refuses to remove anything below STUB_RM_FAIL_UNDER and
 # behaves as rm otherwise, so the stub docker keeps its own inventory.
 STUB_RM = f'''#!/bin/sh
@@ -190,7 +210,7 @@ class Fake:
     """A scratch checkout holding the real script, stubs and a fake init/."""
 
     def __init__(self, tmp_path: Path, mode: str = "ok", *, statuses=(0, 0),
-                 totals=((92, 0, 0, 0), (21, 0, 0, 0)), wait_seconds: int = 5) -> None:
+                 totals=((92, 0, 0, 0), (21, 0, 0, 0)), wait_seconds: int = 5, schema_status: int = 0) -> None:
         self.tmp = tmp_path
         root = tmp_path / "checkout"
         self.db = root / "DB"
@@ -204,8 +224,14 @@ class Fake:
         self.events = tmp_path / "events.log"
         self.state = tmp_path / "state"
         (self.db / "stub_tests.py").write_text(STUB_TESTS, encoding="utf-8")
-        config = {"statuses": list(statuses), "totals": [list(t) for t in totals], "events": str(self.events)}
+        (self.db / "tests").mkdir()
+        (self.db / "tests" / "restore_helper_check.py").write_text("print('restore check stub')\n", encoding="utf-8")
+        config = {"statuses": [*statuses, 0], "totals": [*[list(t) for t in totals], [21, 0, 0, 0]], "events": str(self.events),
+                  "schema_status": schema_status}
         (self.db / "stub_tests_config.json").write_text(json.dumps(config), encoding="utf-8")
+        (self.db / "people_pubs").mkdir()
+        (self.db / "people_pubs" / "__init__.py").write_text("", encoding="utf-8")
+        (self.db / "people_pubs" / "schema.py").write_text(STUB_SCHEMA, encoding="utf-8")
         _executable(self.db / "run_integration_tests.sh",
                     f'#!/usr/bin/env bash\ncd "$(dirname "$0")"\nexec "{sys.executable}" stub_tests.py "$@"\n')
         _executable(root / ".venv" / "bin" / "python", f'#!/bin/sh\nexec "{sys.executable}" "$@"\n')
@@ -252,6 +278,12 @@ class Fake:
 
     def test_runs(self) -> list:
         runs = self.db / "stub_tests_runs.jsonl"
+        if not runs.exists():
+            return []
+        return [json.loads(line) for line in runs.read_text(encoding="utf-8").splitlines()]
+
+    def schema_runs(self) -> list:
+        runs = self.db / "stub_schema_runs.jsonl"
         if not runs.exists():
             return []
         return [json.loads(line) for line in runs.read_text(encoding="utf-8").splitlines()]
@@ -366,8 +398,8 @@ def test_tests_run_in_a_cleared_environment_bound_to_the_disposable_database(tmp
     assert proc.returncode == 0, proc.stderr
     password = fake.password()
     runs = fake.test_runs()
-    assert len(runs) == 2
-    for run in runs:
+    assert len(runs) == 3 and len(fake.schema_runs()) == 1
+    for run in runs + fake.schema_runs():
         env = run["env"]
         assert set(env) - SHELL_VARIABLES == BOUND_ENVIRONMENT
         dsn = env["PEOPLE_PUBS_INTEGRATION_DSN"]
@@ -388,31 +420,50 @@ def test_no_command_line_carries_the_password(tmp_path: Path) -> None:
     proc = fake.run()
     assert proc.returncode == 0, proc.stderr
     password = fake.password()
-    launched = [run["argv"] for run in fake.test_runs()]
+    launched = [run["argv"] for run in fake.test_runs() + fake.schema_runs()]
     launchers = fake.env_log.read_text(encoding="utf-8").splitlines() if fake.env_log.exists() else []
     assert launched, "the test command ran"
+    assert "schema: connecting with postgresql://postgres:<password>@" in proc.stdout, \
+        "the schema upgrade's output is masked"
     for argv in fake.argvs() + launched:
         assert not any(password in item for item in argv), "no docker or test command line holds it"
     assert not any(password in line for line in launchers), "nor does any env launcher"
     assert all(run["env"]["PGPASSWORD"] == password for run in fake.test_runs()), "the environment does"
 
 
-def test_suite_then_patch_reapplication_then_view_and_role_rerun(tmp_path: Path) -> None:
+def test_schema_upgrade_then_suite_then_patch_reapplication_then_view_and_role_rerun(tmp_path: Path) -> None:
     fake = Fake(tmp_path)
     proc = fake.run("-k", "attribution")
     assert proc.returncode == 0, proc.stderr
     events = fake.events_list()
-    suite_at, views_at = [i for i, e in enumerate(events) if e[0] == "tests"]
+    suite_at, views_at, restored_at = [i for i, e in enumerate(events) if e[0] == "tests"]
+    upgrades = [i for i, e in enumerate(events) if e[0] == "schema"]
     reapplications = [i for i, e in enumerate(events) if e[0] == "docker" and "psql" in e]
-    assert len(reapplications) == 1
-    assert suite_at < reapplications[0] < views_at, "suite, then re-application, then the rerun"
+    assert len(reapplications) == 1 and len(upgrades) == 1
+    ready_at = max(i for i, e in enumerate(events) if e[0] == "docker" and "pg_isready" in e)
+    assert ready_at < upgrades[0] < suite_at < reapplications[0] < views_at, \
+        "schema upgrade once bootstrapped, then the suite, the re-application and the rerun"
+    assert events[upgrades[0]] == ["schema", "upgrade"]
     assert "/docker-entrypoint-initdb.d/010_ingestion_runtime_schema.sql" in events[reapplications[0]]
-    suite, views = fake.test_runs()
+    suite, views, restored = fake.test_runs()
+    assert restored_at > views_at and restored["argv"][-2:] == RERUN_TESTS
     assert "-k" in suite["argv"] and not set(RERUN_TESTS) & set(suite["argv"]), "extra arguments go to the main run"
     assert views["argv"][-2:] == RERUN_TESTS and "-k" not in views["argv"]
     for run in (suite, views):
         assert "-p" in run["argv"] and "no:cacheprovider" in run["argv"]
     assert "92 collected: 92 passed" in proc.stdout and "21 collected: 21 passed" in proc.stdout
+
+
+def test_a_failed_schema_upgrade_stops_the_run_before_the_tests_with_its_status(tmp_path: Path) -> None:
+    fake = Fake(tmp_path, schema_status=1)
+    proc = fake.run()
+    assert proc.returncode == 1
+    assert "the schema upgrade exited with status 1" in proc.stderr
+    assert "--- diagnostics for run" in proc.stderr
+    assert fake.test_runs() == [], "no test runs on a database the schema upgrade failed on"
+    shown = fake.password() in proc.stdout + proc.stderr
+    assert not shown, "no output shows the password"
+    fake.assert_nothing_left()
 
 
 def test_failing_tests_keep_their_exit_status_and_clean_up(tmp_path: Path) -> None:

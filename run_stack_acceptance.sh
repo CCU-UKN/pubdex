@@ -22,7 +22,9 @@
 #      below), and checks the image's files as its user 10001 finds them:
 #      under /opt/pubdex root's, directories 755 and files 644, readable and
 #      not writable for that user, who may write nothing else in the image
-#      but the bootstrap volume's mount point and the temporary directories.
+#      but the bootstrap volume's mount point and the temporary directories;
+#      and lists the schema changes the image carries, which have to be
+#      there, and for a build this checkout's DB/schema/, file for file.
 #      The PostgreSQL image is selected the same way -- built with the
 #      application image, given with --postgres-image, or else the one the
 #      compose.yaml it starts names by default -- and its labels checked as
@@ -33,7 +35,11 @@
 #      the run's own that holds that compose.yaml and nothing else;
 #   3. starts it with `docker compose up --wait` on empty volumes and checks
 #      the first start: the bootstrap service's copy of the schema bootstrap
-#      the image carries, which PostgreSQL ran, and the role passwords; that
+#      the image carries, which PostgreSQL ran, and the role passwords; the
+#      schema-upgrade service, which has to have exited with status 0 after
+#      applying every schema change the image carries, and the record of
+#      them in the database, read as app_readonly: the image's changes by
+#      number, name and SHA-256, applied by the image's version; that
 #      the containers mount the project's volumes and the secret files and
 #      nothing else; the image the read service runs, its publication on
 #      loopback alone as Docker reports the binding, no PostgreSQL port, and
@@ -49,8 +55,9 @@
 #   6. stops PostgreSQL and starts it again: readiness fails, liveness holds,
 #      and readiness recovers without a restart of the read service;
 #   7. recreates every container on the same volumes, then removes the
-#      containers and starts them again: no new initialisation, the same
-#      records, app_writer and app_readonly still log in;
+#      containers and starts them again: no new initialisation, a schema
+#      upgrade that finds nothing to do and leaves the record as it was, the
+#      same records, app_writer and app_readonly still log in;
 #   8. reruns create_secrets.sh, which keeps every file; reads the
 #      environments of the database server and of the read service; stops
 #      the read service; and checks that no password occurs in the logs of
@@ -70,8 +77,8 @@
 # release: it requires the labels of both images to be exactly
 # --expect-version and --expect-revision, none of them missing, "unknown",
 # malformed or "-dirty", and starts the compose.yaml the application image
-# carries, which has to name that version as its default application image;
-# nothing of this checkout but the test itself
+# carries, which has to name that version as its default application image
+# and run the schema upgrade; nothing of this checkout but the test itself
 # takes part, and Git is not needed. The version always comes from the label,
 # never from a tag: a tag that names another version, and --pull of a
 # reference without a digest, are refused as usage errors.
@@ -477,6 +484,11 @@ as_readonly() {  # a query as app_readonly, through PostgreSQL's socket in its c
   bounded 60 compose exec -T postgres psql -XqtA -v ON_ERROR_STOP=1 -U app_readonly -d people_db -c "$1"
 }
 
+schema_record() {  # the record of the schema changes: number|name|SHA-256|release|applied at, one per line
+  as_readonly "SELECT number || '|' || name || '|' || sha256 || '|' || release || '|' || applied_at
+    FROM pubdex.schema_changes ORDER BY number"
+}
+
 writer_identity() {  # what an ingestion container connects as
   bounded 120 compose run --rm -T ingest python -c \
     'import people_pubs.config, psycopg; print(*psycopg.connect().execute("SELECT current_user, session_user").fetchone())'
@@ -539,8 +551,8 @@ if [ -z "$image_ref" ]; then
   # The labels build_image.sh has to record, by its rules and in the cleared
   # environment it runs in: the release version of VERSION, and the commit,
   # with "-dirty" for a change Git reports or an ignored Python module of the
-  # package, which the build takes in.
-  expected_revision="$(in_checkout checkout_revision "$ROOT" 'DB/people_pubs/*.py')"
+  # package or schema change, which the build takes in.
+  expected_revision="$(in_checkout checkout_revision "$ROOT" "${IMAGE_CONTEXT_PATHSPECS[@]}")"
   expected_version="$(head -n 1 "$ROOT/VERSION" 2>/dev/null | tr -d '[:space:]')" || expected_version=""
   if ! isolated bash "$ROOT/build_image.sh" --tag "$tag" --postgres-tag "$postgres_tag" > "$WORK/build.log" 2>&1; then
     tail -n 40 "$WORK/build.log" >&2
@@ -709,12 +721,46 @@ if [ "$packages_status" -ne 0 ]; then
   fail "the image's Python packages are not those of its runtime lock, or it holds pip or a wheel"
 fi
 ok "the image holds the $(tail -n 1 "$WORK/image-packages.log"); its Python cannot import pip, and no file in it is named as pip, its scripts, its distribution or a wheel"
+# The schema changes the image carries, which the schema upgrade of step 3
+# has to apply: one line per file of /opt/pubdex/schema, as the record in the
+# database holds it -- number|name|SHA-256 of the file.
+schema_status=0
+bounded_input 120 isolated docker run --rm -i --network none --label "$LABEL_KEY=$RUN_ID" --user 10001:10001 \
+    --entrypoint python "$IMAGE_ID" -I - > "$WORK/image-schema.txt" 2> "$WORK/image-schema.err" <<'PY' || schema_status=$?
+import hashlib, pathlib
+for path in sorted(pathlib.Path("/opt/pubdex/schema").glob("*.sql")):
+    print(int(path.name[:4]), path.stem, hashlib.sha256(path.read_bytes()).hexdigest(), sep="|")
+PY
+if [ "$schema_status" -ne 0 ]; then
+  head -n 5 "$WORK/image-schema.err" >&2
+  fail "cannot list the schema changes in the image's /opt/pubdex/schema"
+fi
+[ -s "$WORK/image-schema.txt" ] \
+  || fail "the image carries no schema change in /opt/pubdex/schema: it predates the schema upgrade that compose.yaml runs"
+SCHEMA_CHANGES="$(wc -l < "$WORK/image-schema.txt" | tr -d '[:space:]') schema change"
+[ "${SCHEMA_CHANGES%% *}" = 1 ] || SCHEMA_CHANGES+="s"
+SCHEMA_LAST="$(tail -n 1 "$WORK/image-schema.txt" | cut -d '|' -f 2)"
+schema_source=""
+if [ "$BUILT_TAG" = "$image_ref" ]; then
+  # A build of this checkout carries its DB/schema/, file for file.
+  expected_schema="$(for file in "$ROOT"/DB/schema/*.sql; do
+                       [ -e "$file" ] || continue
+                       name="${file##*/}" && digest="$(sha256sum "$file")" \
+                         && echo "$((10#${name:0:4}))|${name%.sql}|${digest%% *}"
+                     done)"
+  [ "$(cat "$WORK/image-schema.txt")" = "$expected_schema" ] \
+    || fail "the image built from this checkout does not carry exactly the schema changes of its DB/schema/"
+  schema_source=", exactly this checkout's DB/schema/"
+fi
+ok "the image carries $SCHEMA_CHANGES in /opt/pubdex/schema, the last $SCHEMA_LAST$schema_source"
 mkdir "$PROJECT_DIR"
 if [ "$release" = 1 ]; then
   default_image="$(compose_default_image "$WORK/image-compose.yaml")"
   [ -n "$default_image" ] || fail "the compose.yaml the image carries names no default application image"
   [ "$(reference_tag "$default_image")" = "$expect_version" ] \
     || fail "the compose.yaml the image carries names the image $default_image, not one of release $expect_version"
+  grep -qE '^  schema-upgrade:' "$WORK/image-compose.yaml" \
+    || fail "the compose.yaml the image carries has no schema-upgrade service, which brings the database to the schema of the image"
   cp "$WORK/image-compose.yaml" "$PROJECT_DIR/compose.yaml"
   compose_source="the compose.yaml the image carries"
   ok "the run starts the compose.yaml the image carries, which names the release's image $default_image"
@@ -831,29 +877,62 @@ import json, sys
 config, project, image, run, label, postgres = json.load(open(sys.argv[1], encoding="utf-8")), *sys.argv[2:]
 assert config["name"] == project, config["name"]
 services = config["services"]
-assert set(services) == {"bootstrap", "postgres", "api", "ingest", "demo"}, sorted(services)
-for name in ("bootstrap", "api", "ingest", "demo"):
+assert set(services) == {"bootstrap", "postgres", "schema-upgrade", "api", "ingest", "demo"}, sorted(services)
+for name in ("bootstrap", "schema-upgrade", "api", "ingest", "demo"):
     assert services[name]["image"] == image, (name, services[name]["image"])
     assert services[name]["labels"][label] == run, name
 assert services["postgres"]["labels"][label] == run
 assert services["postgres"]["image"] == postgres, services["postgres"]["image"]
 assert services["bootstrap"].get("network_mode") == "none" and "networks" not in services["bootstrap"]
-assert "secrets" not in services["bootstrap"], "the bootstrap service holds no credential"
+# Each service holds the password files it uses and no other: the
+# superuser's only PostgreSQL and the schema upgrade, the bootstrap none.
+held = {name: sorted(secret["source"] for secret in service.get("secrets", [])) for name, service in services.items()}
+assert held == {"bootstrap": [], "postgres": ["app_readonly_password", "app_writer_password", "postgres_password"],
+                "schema-upgrade": ["postgres_password"], "api": ["app_readonly_password"],
+                "ingest": ["app_writer_password"], "demo": ["app_writer_password"]}, held
+# The schema upgrade runs once PostgreSQL is healthy, hardened as the other
+# one-shot services, and what uses the database waits for its success.
+def condition(name, dependency):
+    return services[name].get("depends_on", {}).get(dependency, {}).get("condition")
+assert condition("schema-upgrade", "postgres") == "service_healthy"
+for name in ("api", "ingest", "demo"):
+    assert condition(name, "schema-upgrade") == "service_completed_successfully", name
+upgrade = services["schema-upgrade"]
+assert upgrade.get("read_only") is True and upgrade.get("cap_drop") == ["ALL"], upgrade
+assert "no-new-privileges:true" in upgrade.get("security_opt", []) and "ports" not in upgrade, upgrade
 assert config["networks"]["default"].get("internal") is True
 assert sorted(services["api"]["networks"]) == ["default", "published"], services["api"]["networks"]
-for name in ("postgres", "ingest", "demo"):
+for name in ("postgres", "schema-upgrade", "ingest", "demo"):
     assert sorted(services[name].get("networks", {"default": None})) == ["default"], name
 PY
-ok "the project directory holds compose.yaml alone; the rendered configuration is the run's project, images and labels, names secret files only, keeps the bootstrap service off every network and ingestion on the internal one"
+ok "the project directory holds compose.yaml alone; the rendered configuration is the run's project, images and labels, names secret files only, gives each service only its own -- the superuser's to PostgreSQL and the schema upgrade alone -- starts the read service and ingestion after the schema upgrade, keeps the bootstrap service off every network and the schema upgrade and ingestion on the internal one"
 
 # --- 3. the first start, on an empty volume ---------------------------------------------------
 
 echo "[3/8] Starting the stack: docker compose up --wait, on empty volumes..."
 started=$SECONDS
+compose up -d --wait --wait-timeout "$WAIT_SECONDS" postgres > "$WORK/up-baseline.log" 2>&1 \
+  || { mask < "$WORK/up-baseline.log" | tail -n 20 >&2; fail "docker compose up --wait failed"; }
+compose logs --no-color bootstrap > "$WORK/bootstrap-first.log" 2>&1 || true
+compose up -d --no-deps api > "$WORK/up-without-schema.log" 2>&1 \
+  || { mask < "$WORK/up-without-schema.log" | tail -n 20 >&2; fail "cannot start the read service without the schema service"; }
+read_port
+wait_until 60 not_ready || fail "a fresh volume without the schema service did not report not ready"
+grep -qF '"reason":"schema_upgrade_required"' "$WORK/readyz.json" \
+  && grep -qF 'database schema version unrecorded' "$WORK/readyz.json" \
+  && grep -qF 'python -m people_pubs.schema upgrade' "$WORK/readyz.json" \
+  || fail "the fresh volume did not explain its missing schema upgrade"
+[ "$(http /livez "$WORK/livez.json")" = 200 ] || fail "liveness failed without the schema service"
+if compose exec -T api python -m people_pubs.api.probe > "$WORK/probe-without-schema.log" 2>&1; then
+  fail "the readiness probe accepted an unrecorded schema"
+fi
+grep -qF 'schema_upgrade_required' "$WORK/probe-without-schema.log" \
+  && grep -qF 'python -m people_pubs.schema upgrade' "$WORK/probe-without-schema.log" \
+  || fail "the probe did not print the schema upgrade message"
+ok "without the schema service, the fresh volume reports 503 schema_upgrade_required, schema version unrecorded and the upgrade command; the probe prints it and /livez stays 200"
 compose up --wait --wait-timeout "$WAIT_SECONDS" > "$WORK/up-first.log" 2>&1 \
   || { mask < "$WORK/up-first.log" | tail -n 20 >&2; fail "docker compose up --wait failed"; }
-ok "bootstrap completed, postgres and api healthy $((SECONDS - started))s after docker compose up --wait"
-compose logs --no-color bootstrap > "$WORK/bootstrap-first.log" 2>&1 || true
+ok "bootstrap and schema-upgrade completed, postgres and api healthy $((SECONDS - started))s after docker compose up --wait"
 compose logs --no-color postgres > "$WORK/postgres-first.log" 2>&1 || true
 grep -qE "bootstrap: /var/lib/pubdex/initdb holds the [0-9]+ files of this image's schema bootstrap" "$WORK/bootstrap-first.log" \
   && grep -qF "running /docker-entrypoint-initdb.d/020_role_passwords.sh" "$WORK/postgres-first.log" \
@@ -869,6 +948,20 @@ if [ "$BUILT_TAG" = "$image_ref" ]; then
     || fail "the image built from this checkout carries other files than its DB/init/"
 fi
 ok "the empty volume was initialised from the schema bootstrap the image carries, and the application roles received their passwords"
+upgrade_container="$(compose ps -aq schema-upgrade 2>/dev/null)" && [ -n "$upgrade_container" ] \
+  || fail "cannot find the schema upgrade's container"
+[ "$(docker inspect --format '{{.State.Status}} {{.State.ExitCode}}' "$upgrade_container")" = "exited 0" ] \
+  || fail "the schema upgrade did not end with status 0"
+compose logs --no-color schema-upgrade > "$WORK/schema-upgrade-first.log" 2>&1 || true
+grep -qF "schema: the database holds the baseline and has had no schema change" "$WORK/schema-upgrade-first.log" \
+  && grep -qF "schema: done: applied $SCHEMA_CHANGES; the database has every schema change of PubDex $image_version, up to $SCHEMA_LAST" \
+       "$WORK/schema-upgrade-first.log" \
+  || { mask < "$WORK/schema-upgrade-first.log" | tail -n 10 >&2; fail "the schema upgrade did not apply the image's schema changes to the new database"; }
+RECORD="$(schema_record 2> "$WORK/record.err")" \
+  || { mask < "$WORK/record.err" >&2; fail "cannot read the record of schema changes as app_readonly"; }
+[ "$(cut -d '|' -f 1-4 <<<"$RECORD")" = "$(sed "s/\$/|$image_version/" "$WORK/image-schema.txt")" ] \
+  || fail "the database records other schema changes than the image carries, or another release: $(cut -d '|' -f 1-4 <<<"$RECORD" | tr '\n' ' ')"
+ok "the schema upgrade exited with status 0 after applying the image's $SCHEMA_CHANGES, which the database records by number, name and SHA-256, up to $SCHEMA_LAST, applied by PubDex $image_version"
 mounts="$(foreign_mounts "$PROJECT" "$SECRETS")" || fail "cannot list the mounts of the project's containers"
 [ -z "$mounts" ] || fail "a container mounts more than the project's volumes and the secret files: $mounts"
 ok "the stack runs from the image and compose.yaml alone: its containers mount the project's two volumes and the secret files, and nothing else"
@@ -986,6 +1079,11 @@ restart_checks() {  # restart_checks <log name>: a restart, not a bootstrap, wit
   compose logs --no-color postgres > "$WORK/$1" 2>&1 || true
   grep -qF "Skipping initialization" "$WORK/$1" && ! grep -qF "020_role_passwords.sh" "$WORK/$1" \
     || fail "PostgreSQL initialised the volume again"
+  compose logs --no-color schema-upgrade > "$WORK/schema-upgrade-${1#postgres-}" 2>&1 || true
+  grep -qF "schema: nothing to do: the database has every schema change of PubDex $image_version, up to $SCHEMA_LAST" \
+       "$WORK/schema-upgrade-${1#postgres-}" && ! grep -qF "schema: applying" "$WORK/schema-upgrade-${1#postgres-}" \
+    || { mask < "$WORK/schema-upgrade-${1#postgres-}" | tail -n 10 >&2; fail "the schema upgrade did not find the database at the image's schema"; }
+  [ "$(schema_record 2>/dev/null)" = "$RECORD" ] || fail "the record of schema changes changed"
   read_port
   wait_until 60 ready || fail "GET /readyz after the restart"
   [ "$(http '/v0/publications?limit=100' "$WORK/publications-again.json")" = 200 ] || fail "GET /v0/publications after the restart"
@@ -993,7 +1091,7 @@ restart_checks() {  # restart_checks <log name>: a restart, not a bootstrap, wit
   [ "$(writer_identity 2> "$WORK/writer-${1%.log}.err")" = "app_writer app_writer" ] || fail "app_writer cannot log in after the restart"
 }
 restart_checks postgres-recreated.log
-ok "every container recreated on the same volumes: no initialisation, the same publication (pub_id $DEMO_PUB_ID) served as app_readonly, app_writer logs in"
+ok "every container recreated on the same volumes: no initialisation, a schema upgrade with nothing to do, the same publication (pub_id $DEMO_PUB_ID) served as app_readonly, app_writer logs in"
 compose logs --no-color > "$WORK/all-before-down.log" 2>&1 || fail "cannot save the containers' logs before docker compose down"
 compose down --timeout 60 > "$WORK/down.log" 2>&1 || fail "docker compose down failed"
 left="$(docker ps -aq --filter "label=$PROJECT_LABEL=$PROJECT")" || fail "cannot list the project's containers after docker compose down"
@@ -1003,7 +1101,7 @@ compose up --wait --wait-timeout "$WAIT_SECONDS" > "$WORK/up-again.log" 2>&1 \
   || { mask < "$WORK/up-again.log" | tail -n 20 >&2; fail "docker compose up --wait after down failed"; }
 API_CONTAINER="$(container_of api)" && [ -n "$API_CONTAINER" ] || fail "cannot find the read service's container after docker compose up"
 restart_checks postgres-after-down.log
-ok "docker compose down kept the volume; up again: no initialisation, the same publication, both roles log in"
+ok "docker compose down kept the volume; up again: no initialisation, a schema upgrade with nothing to do, the same publication, both roles log in"
 
 # --- 8. secrets ---------------------------------------------------------------------------------
 
@@ -1052,4 +1150,4 @@ if [ "$release" = 1 ]; then
 else
   echo "      tested: the image $image_ref ($IMAGE_ID), revision $image_revision, and the PostgreSQL image $postgres_ref ($POSTGRES_ID), revision $postgres_revision, with $compose_source -- a development run, not the verification of a release"
 fi
-echo "PASS: the Compose deployment started from an empty volume, served the demonstration ingested inside it, recovered from a database restart, kept its data across recreation, and kept its secrets out of every output."
+echo "PASS: the Compose deployment started from an empty volume, brought it to the schema of its image, served the demonstration ingested inside it, recovered from a database restart, kept its data across recreation, and kept its secrets out of every output."

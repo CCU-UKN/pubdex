@@ -1,29 +1,35 @@
 """Resource management of DB/run_migration_smoke.sh, offline.
 
-The real script runs against a stub `docker` executable that records every
-invocation and keeps a small inventory of the containers and volumes it was
-asked to create, so the test can prove — without Docker and without touching
-any existing service — that the script creates uniquely named, labelled
-resources, registers cleanup before creating them, never pre-deletes, removes
-only what it created (after success, a failed start, a bootstrap that never
-completes, a container that exits, or an interrupt), bounds its readiness
-wait, and aborts on a name collision without touching the colliding resource.
-DB/run_task_1a_demo.sh shares the same lifecycle; it runs from a scratch
-checkout whose interpreter records every Python step instead of connecting
-anywhere. Both are checked for a second signal arriving while the cleanup is
-removing the container; for a cleanup that fails -- a removal the daemon
-refuses, one that reports success but leaves the resource, a daemon that no
-longer answers, or (for the demonstration) a temporary directory that cannot
-be removed -- which is reported with the commands that find the leftovers and
-fails an otherwise successful run, while an earlier failure or a signal keeps
-its own exit status; and for their superuser password: random per run, handed
-to Docker by name so that it is in no command line, absent from their output,
-and masked in a container log that contains it. The demonstration's recorded
-Python steps also show that each gets the disposable database only through
-its cleared environment, never as an argument.
+The real script runs from a scratch checkout against a stub `docker`
+executable that records every invocation and keeps a small inventory of the
+containers and volumes it was asked to create, and an interpreter that
+records every Python step instead of connecting anywhere, so the test can
+prove — without Docker and without touching any existing service — that the
+script creates uniquely named, labelled resources, publishes PostgreSQL on a
+loopback port only, registers cleanup before creating them, never
+pre-deletes, removes only what it created (after success, a failed start, a
+bootstrap that never completes, a container that exits, or an interrupt),
+bounds its readiness wait, and aborts on a name collision without touching
+the colliding resource. Its schema upgrade runs twice and is followed by
+status, each in a cleared environment bound to the disposable database, with
+the password in a pipe that PEOPLE_DB_PASSWORD_FILE names; a failed schema
+upgrade fails the run. DB/run_task_1a_demo.sh shares the same lifecycle and
+the same scratch checkout, and applies the schema upgrade before its first
+ingestion step. Both are checked for a second signal arriving while the
+cleanup is removing the container; for a cleanup that fails -- a removal the
+daemon refuses, one that reports success but leaves the resource, a daemon
+that no longer answers, or a temporary directory that cannot be removed --
+which is reported with the commands that find the leftovers and fails an
+otherwise successful run, while an earlier failure or a signal keeps its own
+exit status; and for their superuser password: random per run, handed to
+Docker by name so that it is in no command line, absent from their output,
+and masked in a container log that contains it. The recorded Python steps
+also show that each gets the disposable database only through its cleared
+environment, never as an argument.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -149,14 +155,22 @@ exec "{REAL_RM}" "$@"
 '''
 
 # Stands in for .venv/bin/python in a scratch checkout: records each call and
-# does just enough for the demonstration to finish -- the export step writes
-# the expected CSV, and the demonstration's own check of it ("-") really runs.
-DEMO_RECORDER = r'''
-import json, os, sys
+# does just enough for the scripts to finish -- the schema upgrade records the
+# SHA-256 of what the file PEOPLE_DB_PASSWORD_FILE names holds, and fails
+# when a file schema-fails lies next to this one; the export step writes the
+# expected CSV, and the demonstration's own check of it ("-") really runs.
+RECORDER = r'''
+import hashlib, json, os, sys
 from pathlib import Path
 args = sys.argv[1:]
-with open(Path(__file__).resolve().parent / "python-calls.jsonl", "a", encoding="utf-8") as fh:
-    fh.write(json.dumps({"argv": args, "env": dict(os.environ)}) + "\n")
+here = Path(__file__).resolve().parent
+password_file = os.environ.get("PEOPLE_DB_PASSWORD_FILE")
+held = hashlib.sha256(Path(password_file).read_bytes()).hexdigest() if password_file else None
+with open(here / "python-calls.jsonl", "a", encoding="utf-8") as fh:
+    fh.write(json.dumps({"argv": args, "env": dict(os.environ), "password_file_sha256": held}) + "\n")
+if args[:2] == ["-m", "people_pubs.schema"] and (here / "schema-fails").exists():
+    print("schema: refused: stub failure", file=sys.stderr)
+    sys.exit(1)
 if args[:2] == ["-m", "people_pubs.sync.export_publications"]:
     Path(args[args.index("--output") + 1]).write_text(
         "pub_id,doi,title,year,venue,source_of_truth,internal_authors\n"
@@ -173,6 +187,13 @@ DEMO_ENVIRONMENT = {
     "PEOPLE_DB_DSN", "PEOPLE_PUBS_CROSSREF_MAILTO", "PGHOST", "PGHOSTADDR", "PGPORT", "PGUSER",
     "PGPASSWORD", "PGDATABASE", "PGSSLMODE", "PGSERVICEFILE", "PGSYSCONFDIR", "PGPASSFILE",
 }
+#: The environment of the schema upgrade in the migration smoke test: no
+#: PGPASSWORD and no DSN, the password in the file PEOPLE_DB_PASSWORD_FILE names.
+SMOKE_ENVIRONMENT = {
+    "HOME", "PATH", "LANG", "PYTHONDONTWRITEBYTECODE", "PYTHONPATH", "PEOPLE_PUBS_SKIP_DOTENV",
+    "PGHOST", "PGHOSTADDR", "PGPORT", "PGUSER", "PGDATABASE", "PGSSLMODE", "PGSERVICEFILE", "PGSYSCONFDIR",
+    "PGPASSFILE", "PEOPLE_DB_PASSWORD_FILE",
+}
 SHELL_VARIABLES = {"PWD", "OLDPWD", "SHLVL", "_"}
 
 # kind -> (ownership label, readiness-wait variable, resource name prefix)
@@ -180,6 +201,7 @@ KINDS = {
     "migration-smoke": ("pubdex.migration-smoke.run", "SMOKE_WAIT_SECONDS", "pubdex-migration-smoke-"),
     "task-1a-demo": ("pubdex.task-1a-demo.run", "TASK_1A_WAIT_SECONDS", "pubdex-task-1a-demo-"),
 }
+SCRIPTS = {"migration-smoke": "run_migration_smoke.sh", "task-1a-demo": "run_task_1a_demo.sh"}
 BOTH_SCRIPTS = pytest.mark.parametrize("kind", list(KINDS))
 
 
@@ -196,20 +218,28 @@ def _finished_lines(path: Path) -> list:
     return data[:data.rfind(b"\n") + 1].decode("utf-8").splitlines()
 
 
-def _demo_checkout(root: Path) -> Path:
-    """A scratch checkout holding the real demonstration, stub init scripts and
-    a recording interpreter; returns the demonstration's path."""
+def _checkout(root: Path, name: str) -> Path:
+    """A scratch checkout holding the real script, stub init scripts, the
+    real schema changes, VERSION and a recording interpreter; returns the
+    script's path."""
     for script in sorted((DB_DIR / "init").glob("*.sql")):
         (root / "DB" / "init").mkdir(parents=True, exist_ok=True)
         (root / "DB" / "init" / script.name).write_text("-- stub\n", encoding="utf-8")
-    demo = root / "DB" / "run_task_1a_demo.sh"
-    shutil.copy2(DB_DIR / "run_task_1a_demo.sh", demo)
+    shutil.copytree(DB_DIR / "schema", root / "DB" / "schema")
+    shutil.copy2(DB_DIR.parent / "VERSION", root / "VERSION")
+    script = root / "DB" / name
+    shutil.copy2(DB_DIR / name, script)
     (root / "DB" / "lib").mkdir()
     shutil.copy2(DB_DIR / "lib" / "disposable_postgres.sh", root / "DB" / "lib")
     bindir = root / ".venv" / "bin"
-    _executable(bindir / "recorder.py", DEMO_RECORDER)
+    _executable(bindir / "recorder.py", RECORDER)
     _executable(bindir / "python", f'#!/bin/sh\nexec "{sys.executable}" "{bindir / "recorder.py"}" "$@"\n')
-    return demo
+    return script
+
+
+def _python_calls(script: Path) -> list:
+    log = script.parents[1] / ".venv" / "bin" / "python-calls.jsonl"
+    return [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()] if log.exists() else []
 
 
 class _Run:
@@ -223,7 +253,7 @@ class _Run:
         self.state = tmp_path / "state.json"
         self.private = tmp_path / "tmp"  # TMPDIR: the demonstration's private directory goes here
         self.private.mkdir()
-        self.script = SCRIPT if kind == "migration-smoke" else _demo_checkout(tmp_path / "checkout")
+        self.script = _checkout(tmp_path / "checkout", SCRIPTS[kind])
         self.env = dict(
             os.environ,
             PATH=f"{self.bindir}{os.pathsep}{os.environ['PATH']}",
@@ -313,7 +343,8 @@ def test_success_uses_unique_labelled_resources_and_removes_only_them(tmp_path: 
         assert create[create.index("--label") + 1] == f"{LABEL_KEY}={run_id}"
         start = next(c for c in calls if c[0] == "run")
         assert start[start.index("--label") + 1] == f"{LABEL_KEY}={run_id}"
-        assert "-p" not in start and "--publish" not in start, "no host port is published"
+        publish = [start[i + 1] for i, a in enumerate(start) if a in ("-p", "--publish")]
+        assert publish == ["127.0.0.1::5432"], "only a loopback port that Docker picks"
         # Never a pre-delete: no removal of anything before the resources exist.
         first_create = next(i for i, c in enumerate(calls) if c[:2] == ["volume", "create"])
         assert not any(c[0] == "rm" or c[:2] == ["volume", "rm"] for c in calls[:first_create])
@@ -416,7 +447,7 @@ def test_one_variable_sets_the_image_and_the_run_reports_what_it_used(tmp_path: 
 def test_interrupt_during_wait_cleans_up(tmp_path: Path, signum, status: int) -> None:
     run = _Run(tmp_path, mode="never-ready", wait_seconds=60)
     proc = subprocess.Popen(
-        ["bash", str(SCRIPT)], env=run.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        ["bash", str(run.script)], env=run.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
@@ -530,8 +561,9 @@ def test_a_signal_keeps_its_status_when_the_cleanup_fails_too(tmp_path: Path, ki
     run.assert_cleanup_reported(subprocess.CompletedProcess(proc.args, proc.returncode, out, err))
 
 
-def test_a_temporary_directory_that_cannot_be_removed_fails_the_demonstration(tmp_path: Path) -> None:
-    run = _Run(tmp_path, mode="ok", kind="task-1a-demo")
+@BOTH_SCRIPTS
+def test_a_temporary_directory_that_cannot_be_removed_fails_the_run(tmp_path: Path, kind: str) -> None:
+    run = _Run(tmp_path, mode="ok", kind=kind)
     _executable(run.bindir / "rm", STUB_RM)
     run.env["STUB_RM_FAIL_UNDER"] = str(run.private)
     proc = run.run()
@@ -562,13 +594,13 @@ def test_demonstration_steps_get_the_database_only_through_their_environment(tmp
     assert "PASS: clean-clone acceptance run completed" in proc.stdout
 
     password = run.password()
-    log = run.script.parents[1] / ".venv" / "bin" / "python-calls.jsonl"
-    calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+    calls = _python_calls(run.script)
     modules = [call["argv"][1] for call in calls if call["argv"][:1] == ["-m"]]
     assert modules == [
-        "people_pubs.sync.add_people", "people_pubs.sync.fixture_demo",
+        "people_pubs.schema", "people_pubs.sync.add_people", "people_pubs.sync.fixture_demo",
         "people_pubs.sync.attribution_rules", "people_pubs.sync.export_publications",
-    ]
+    ], "the schema upgrade before the first ingestion step"
+    assert calls[0]["argv"] == ["-m", "people_pubs.schema", "upgrade"]
     # Checks on the password are bare booleans, so a failure never prints it.
     for call in calls:
         takes_dsn = "--dsn" in call["argv"]
@@ -600,3 +632,73 @@ def test_migration_smoke_masks_the_log_tail_after_a_timeout(tmp_path: Path) -> N
     shown = run.password() in proc.stdout + proc.stderr
     assert not shown, "only the masked form may appear"
     assert "the superuser password is <password>" in proc.stderr
+
+
+def test_the_schema_upgrade_runs_twice_then_status_bound_to_the_disposable_database(tmp_path: Path) -> None:
+    run = _Run(tmp_path, mode="ok")
+    env_log = run.dir / "env.log"  # an `env NAME=value` launcher would show up here
+    _executable(
+        run.bindir / "env",
+        f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{env_log}"\nexec "{shutil.which("env") or "/usr/bin/env"}" "$@"\n',
+    )
+    run.env.update(
+        PEOPLE_DB_DSN="postgresql://db.invalid/people_db", PGHOST="db.invalid", PGPORT="1",
+        PGPASSWORD="example-inherited", PEOPLE_DB_PASSWORD_FILE="/nonexistent", PGSERVICE="production",
+        PEOPLE_PUBS_VERSION="9.9.9", PEOPLE_PUBS_SKIP_DOTENV="0", UNRELATED_SETTING="must-not-leak",
+    )
+    proc = run.run()
+    assert proc.returncode == 0, proc.stderr
+    assert "[4/7] Applying the schema upgrade" in proc.stdout
+    assert "[5/7] Applying the schema upgrade again: nothing is left to do" in proc.stdout
+    assert "PASS: the schema upgrade applied every schema change of DB/schema/ once" in proc.stdout
+    assert proc.stdout.rstrip().endswith("PASS: schema bootstraps from empty DB and the runtime patch is re-runnable.")
+    calls = _python_calls(run.script)
+    assert [call["argv"] for call in calls] == [
+        ["-m", "people_pubs.schema", "upgrade"], ["-m", "people_pubs.schema", "upgrade"],
+        ["-m", "people_pubs.schema", "status"]]
+    # Checks on the password are bare booleans, so a failure never prints it.
+    password = run.password()
+    piped = hashlib.sha256(f"{password}\n".encode()).hexdigest()
+    for call in calls:
+        step_env = call["env"]
+        assert set(step_env) - SHELL_VARIABLES == SMOKE_ENVIRONMENT, "nothing inherited, nothing missing"
+        assert (step_env["PGHOST"], step_env["PGPORT"], step_env["PGUSER"], step_env["PGDATABASE"]) == (
+            "127.0.0.1", "1", "postgres", "people_db")
+        assert step_env["PEOPLE_DB_PASSWORD_FILE"].startswith("/dev/fd/"), "a pipe, not a file"
+        delivered = call["password_file_sha256"] == piped
+        assert delivered, "the pipe holds the run's password"
+        assert step_env["PEOPLE_PUBS_SKIP_DOTENV"] == "1"
+        assert not any(password in item for item in call["argv"]), "no Python command line holds it"
+    launchers = env_log.read_text(encoding="utf-8") if env_log.exists() else ""
+    launched_with_it = password in launchers
+    assert not launched_with_it, "nor does any env launcher"
+    shown = password in proc.stdout + proc.stderr
+    assert not shown, "and no output shows it"
+    # The record is checked against the schema changes of DB/schema/.
+    psql = [c for c in run.calls() if c[:1] == ["exec"] and "psql" in c]
+    expected = ",".join(sorted(path.stem for path in (DB_DIR / "schema").glob("*.sql")))
+    assert any(f"changes={expected}" in c for c in psql)
+    assert run.inventory() == {"containers": {}, "volumes": {}}
+    assert os.listdir(run.private) == []
+
+
+def test_a_failed_schema_upgrade_fails_the_run_and_cleans_up(tmp_path: Path) -> None:
+    run = _Run(tmp_path, mode="ok")
+    (run.script.parents[1] / ".venv" / "bin" / "schema-fails").write_text("", encoding="utf-8")
+    proc = run.run()
+    assert proc.returncode == 1
+    assert "schema: refused: stub failure" in proc.stderr
+    assert "PASS" not in proc.stdout
+    assert [call["argv"] for call in _python_calls(run.script)] == [["-m", "people_pubs.schema", "upgrade"]]
+    container, volume = _created(run.calls())
+    assert _removals(run.calls()) == ([container], [volume])
+    assert run.inventory() == {"containers": {}, "volumes": {}}
+    assert os.listdir(run.private) == []
+
+
+def test_the_smoke_test_needs_the_virtual_environment_before_it_creates_anything(tmp_path: Path) -> None:
+    run = _Run(tmp_path, mode="ok")
+    shutil.rmtree(run.script.parents[1] / ".venv")
+    proc = run.run()
+    assert proc.returncode == 1 and "./setup_venv.sh" in proc.stderr
+    assert run.calls() == [], "Docker was never asked"

@@ -29,7 +29,9 @@
 #      as DEPLOYMENT.md says, and checks the configuration Compose renders
 #      from the .env file;
 #   3. starts the stack with `docker compose up --wait` and checks the first
-#      start from the schema bootstrap the image carries, that the containers
+#      start from the schema bootstrap the image carries, followed by the
+#      schema upgrade, which has to apply the schema changes the image
+#      carries and record them in the database; that the containers
 #      mount the project's volumes and the secret files and nothing else, the
 #      read service bound to its configured port on 127.0.0.1 alone and
 #      PostgreSQL to no host port, as Docker reports the bindings -- no check
@@ -63,8 +65,10 @@
 #      of mode 0600, `docker compose down --volumes`, a first start of
 #      PostgreSQL alone on a new volume, the read service stopped, the
 #      database dropped, created again and restored by pg_restore in one
-#      transaction, then `docker compose up --wait`. The verification query
-#      has to count what it counted before the dump, the read service has to
+#      transaction, then `docker compose up --wait`, whose schema upgrade has
+#      to find the record the dump brought and nothing to do. The
+#      verification query has to count what it counted before the dump, the
+#      record of schema changes to be the dumped one, the read service has to
 #      serve the same publication, the database to hold the roster's
 #      records, and app_writer to refresh the snapshot again;
 #   9. checks the environments of the database server and the read service,
@@ -394,9 +398,19 @@ superuser_sql() {
   bounded_input 60 dc exec -T -u postgres postgres psql -XqtA -v ON_ERROR_STOP=1 -d people_db -f -
 }
 
+# The record of the schema changes: number|name|SHA-256|release|applied at,
+# one per line, as the superuser on that socket.
+schema_record() {
+  bounded 60 dc exec -T -u postgres postgres psql -XqtA -v ON_ERROR_STOP=1 -d people_db -c \
+    "SELECT number || '|' || name || '|' || sha256 || '|' || release || '|' || applied_at FROM pubdex.schema_changes ORDER BY number"
+}
+
 # login_check <role> <password> ...: for each pair, one new TCP connection
 # from a new ingestion container, which reads the pairs from its standard
-# input; prints "accepted <current_user>" or "refused" per pair.
+# input; prints "accepted <current_user>" or "refused" per pair. The
+# container starts with --no-deps: `docker compose run` would otherwise start
+# the schema upgrade first, which logs in with the superuser's file, and
+# between a file change and set_passwords.sh that has to fail.
 LOGIN_CHECK='
 import sys, psycopg
 server = {"host": "postgres", "port": 5432, "dbname": "people_db", "connect_timeout": 10,
@@ -415,7 +429,7 @@ login_check() {
     lines+="$1"$'\t'"$2"$'\n'
     shift 2
   done
-  printf '%s' "$lines" | bounded_input 120 dc run --rm -T ingest python -I -c "$LOGIN_CHECK"
+  printf '%s' "$lines" | bounded_input 120 dc run --rm --no-deps -T ingest python -I -c "$LOGIN_CHECK"
 }
 
 new_password() { od -An -N32 -tx1 /dev/urandom | tr -d ' \n'; }
@@ -623,9 +637,9 @@ import json, sys
 config, project, image, port, secrets, postgres = json.load(open(sys.argv[1], encoding="utf-8")), *sys.argv[2:]
 assert config["name"] == project, config["name"]
 services = config["services"]
-assert set(services) == {"bootstrap", "postgres", "api"}, sorted(services)
-assert services["api"]["image"] == image, services["api"]["image"]
-assert services["bootstrap"]["image"] == image, services["bootstrap"]["image"]
+assert set(services) == {"bootstrap", "postgres", "schema-upgrade", "api"}, sorted(services)
+for name in ("bootstrap", "schema-upgrade", "api"):
+    assert services[name]["image"] == image, (name, services[name]["image"])
 assert services["postgres"]["image"] == postgres, services["postgres"]["image"]
 published = [(p.get("host_ip"), str(p.get("published")), p.get("target")) for p in services["api"]["ports"]]
 assert published == [("127.0.0.1", port, 8000)], published
@@ -643,7 +657,7 @@ ok "Compose renders the .env file's project, images, port 127.0.0.1:$PORT, secre
 echo "[3/9] Starting the stack as an operator does: docker compose up --wait..."
 started=$SECONDS
 wait_healthy up-first.log
-ok "bootstrap completed, postgres and api healthy $((SECONDS - started))s after docker compose up --wait"
+ok "bootstrap and schema-upgrade completed, postgres and api healthy $((SECONDS - started))s after docker compose up --wait"
 dc logs --no-color bootstrap > "$WORK/bootstrap-first.log" 2>&1 || true
 dc logs --no-color postgres > "$WORK/postgres-first.log" 2>&1 || true
 grep -qE "bootstrap: /var/lib/pubdex/initdb holds the [0-9]+ files of this image's schema bootstrap" "$WORK/bootstrap-first.log" \
@@ -654,6 +668,13 @@ API_CONTAINER="$(container_of api)" && [ -n "$API_CONTAINER" ] || fail "cannot f
 POSTGRES_CONTAINER="$(container_of postgres)" && [ -n "$POSTGRES_CONTAINER" ] || fail "cannot find PostgreSQL's container"
 [ "$(docker inspect --format '{{.Image}}' "$API_CONTAINER")" = "$IMAGE_ID" ] || fail "the read service does not run the selected image"
 ok "the empty volume was initialised from the schema bootstrap the image carries, and the read service runs the selected image"
+dc logs --no-color schema-upgrade > "$WORK/schema-upgrade-first.log" 2>&1 || true
+applied="$(sed -nE 's/.* schema: done: applied ([0-9]+) schema changes?; .*/\1/p' "$WORK/schema-upgrade-first.log")"
+RECORD="$(schema_record 2> "$WORK/record.err")" || { mask < "$WORK/record.err" >&2; fail "cannot read the record of schema changes"; }
+grep -qF "schema: the database holds the baseline and has had no schema change" "$WORK/schema-upgrade-first.log" \
+  && [ -n "$applied" ] && [ "$applied" -gt 0 ] && [ "$(wc -l <<<"$RECORD" | tr -d '[:space:]')" = "$applied" ] \
+  || { mask < "$WORK/schema-upgrade-first.log" | tail -n 10 >&2; fail "the schema upgrade did not apply and record the image's schema changes on the new database"; }
+ok "the schema upgrade applied the image's schema changes to the new database and recorded them, $applied in all, the last $(tail -n 1 <<<"$RECORD" | cut -d '|' -f 2)"
 mounts="$(foreign_mounts "$PROJECT" "$SECRETS")" || fail "cannot list the mounts of the project's containers"
 [ -z "$mounts" ] || fail "a container mounts more than the project's volumes and the secret files: $mounts"
 ok "the containers mount the project's two volumes and the secret files, and nothing of the operator's directory or the checkout"
@@ -920,6 +941,12 @@ wait_healthy up-restored.log
 counts_after="$(counts 2> "$WORK/counts-after.err")" || { mask < "$WORK/counts-after.err" >&2; fail "the verification query failed after the restore"; }
 [ "$counts_after" = "$counts_before" ] || fail "after the restore the verification query counts $counts_after, before the dump $counts_before"
 ok "dropdb, createdb and pg_restore in one transaction, then docker compose up --wait: healthy; the verification query counts $counts_after again"
+dc logs --no-color schema-upgrade > "$WORK/schema-upgrade-restored.log" 2>&1 || true
+grep -qF "schema: nothing to do: the database has every schema change of PubDex" "$WORK/schema-upgrade-restored.log" \
+  && ! grep -qF "schema: applying" "$WORK/schema-upgrade-restored.log" \
+  || { mask < "$WORK/schema-upgrade-restored.log" | tail -n 10 >&2; fail "the schema upgrade after the restore did not find the database at the schema of the image"; }
+[ "$(schema_record 2>/dev/null)" = "$RECORD" ] || fail "the restored database records other schema changes than the dumped one"
+ok "the dump brought the record of schema changes, and the schema upgrade of docker compose up --wait found nothing to do"
 served_unchanged publications-after-restore.json
 [ "$(records 2>/dev/null)" = "$EXPECTED_RECORDS" ] || fail "the restored database holds other people than the roster's"
 bounded 120 dc run --rm -T ingest python -m people_pubs.sync.attribution_rules recompute --refresh-only \

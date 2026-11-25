@@ -53,6 +53,7 @@ ALLOWLIST = {
     "DB/tests/fixtures/golden/orcid_work_minimal.json",
     "DB/tests/fixtures/golden/crossref_work_minimal.json",
     *INIT_FILES,
+    "DB/schema/*.sql",
     *SETUP_FILES,
     "LICENSE",
     "LICENSE-CC-BY-4.0",
@@ -75,6 +76,11 @@ def _instructions() -> List[List[str]]:
 
 def _instruction(name: str) -> List[List[str]]:
     return [words for words in _instructions() if words[0] == name]
+
+
+def _image_copies() -> List[List[str]]:
+    """The COPY instructions of the image's own stage, the last, as words."""
+    return [run.split() for run in _stages()[""] if run.startswith("COPY ")]
 
 
 def _labels() -> Dict[str, str]:
@@ -106,14 +112,24 @@ def _arg(name: str, dockerfile: str = DOCKERFILE) -> str:
     return found[0]
 
 
+#: The list of the packages a build stage compiled with, which each image
+#: carries and release.sh's provenance record reads (DB/release_provenance.py).
+BUILD_PACKAGES = "RUN dpkg-query -W -f '${Package} ${Version}\\n' | LC_ALL=C sort > /build-packages.txt"
+BUILD_PACKAGES_COPY = ["COPY", "--from=build-packages", "/build-packages.txt",
+                       "/usr/share/doc/pubdex/build-packages.txt"]
+
+
 # --- Dockerfile -------------------------------------------------------------------
 
 def test_the_base_image_is_fixed_by_digest_and_named_in_the_labels() -> None:
-    # One base for every stage, named once, by digest.
+    # One base for every stage that runs anything, named once, by digest;
+    # the stage of the build files is empty but for them, and the stage that
+    # records psycopg-c's build packages continues psycopg-c's.
     reference = _arg("PYTHON_BASE")
     assert DIGEST.search(reference), reference
-    assert [words[1] for words in _instruction("FROM")] == ["${PYTHON_BASE}"] * 3
-    assert list(_stages()) == ["wheels", "psycopg-c", ""]
+    assert [words[1] for words in _instruction("FROM")] == ["scratch"] + ["${PYTHON_BASE}"] * 2 + \
+        ["psycopg-c", "${PYTHON_BASE}"]
+    assert list(_stages()) == ["build-files", "wheels", "psycopg-c", "build-packages", ""]
     name, digest = reference.split("@")
     labels = _labels()
     assert labels["org.opencontainers.image.base.digest"] == digest
@@ -154,19 +170,35 @@ def test_the_image_carries_the_schema_bootstrap_the_compose_files_and_their_scri
                                                                         for source in SETUP_FILES}
 
 
+def test_the_image_carries_the_schema_changes_and_the_version_the_schema_upgrade_records() -> None:
+    # DB/schema/ as a whole, next to the package as people_pubs.schema
+    # expects it: the allowlist lets in its .sql files and nothing else, so a
+    # new schema change reaches the image without a line of its own.
+    assert [words for words in _instruction("COPY") if "DB/schema" in words] == [
+        ["COPY", "DB/schema", "/opt/pubdex/schema"]]
+    assert sorted(path.suffix for path in (ROOT / "DB" / "schema").iterdir()) == \
+        [".sql"] * len(list((ROOT / "DB" / "schema").iterdir()))
+    assert "python -m people_pubs.schema upgrade|status" in DOCKERFILE
+    # The release version build_image.sh gives the labels, in the environment.
+    assert "ENV PEOPLE_PUBS_VERSION=${PEOPLE_PUBS_VERSION}" in DOCKERFILE.splitlines()
+    instructions = [" ".join(words) for words in _instructions()]
+    assert instructions.index("ENV PEOPLE_PUBS_VERSION=${PEOPLE_PUBS_VERSION}") > \
+        instructions.index("ARG PEOPLE_PUBS_VERSION=unknown"), "after the argument it takes its value from"
+
+
 def test_every_copy_takes_allowlisted_files_from_the_build_context_as_roots() -> None:
     # No --chown, so COPY gives every file and directory to root; no --chmod,
     # whose symbolic modes only the builder of Docker Engine 28.0 and later
     # accepts: the Dockerfile keeps to what the builder of 25.0 understands,
     # although the deployment supports no Engine that old.
     assert _instruction("ADD") == [], "COPY only: ADD fetches and unpacks"
-    copies = _instruction("COPY")
+    copies = [words for words in _instruction("COPY") if words[1:2] != [BUILD_PACKAGES_COPY[1]]]
     assert copies
     for words in copies:
         assert not any(word.startswith("--") for word in words), words
         for source in words[1:-1]:
             if (ROOT / source).is_dir():
-                admitted = f"{source}/**/*.py" in ALLOWLIST
+                admitted = f"{source}/**/*.py" in ALLOWLIST or f"{source}/*.sql" in ALLOWLIST
             else:
                 admitted = any(fnmatch.fnmatch(source, pattern) for pattern in ALLOWLIST)
             assert admitted, f"{source} is not in the build context"
@@ -182,18 +214,23 @@ def test_one_step_after_the_last_copy_gives_every_file_644_and_every_directory_7
     assert instructions[last_copy + 1] == MODES
     assert instructions.count(MODES) == 1
     assert instructions.index(MODES) < next(i for i, line in enumerate(instructions) if line.startswith("USER "))
-    assert all(words[-1].startswith("/opt/pubdex/") for words in _instruction("COPY")), "nothing copied elsewhere"
+    assert all(words[-1].startswith("/opt/pubdex/") for words in _image_copies() if words != BUILD_PACKAGES_COPY), \
+        "nothing copied elsewhere but the list of build packages"
 
 
+#: The files the steps that fetch and install mount: the three locks and the
+#: four scripts, in a stage of their own, so that no other file of the build
+#: context invalidates those steps.
+BUILD_FILES = ["DB/requirements-pip.txt", "DB/requirements-build.txt", "DB/requirements.txt", *BUILD_SCRIPTS]
 #: The stage that downloads: every file of the three locks, by hash, with
 #: DB/fetch_verified.py, and nothing else.
-FETCH = ("RUN --mount=type=bind,source=DB,target=/opt/pubdex-build "
+FETCH = ("RUN --mount=type=bind,from=build-files,target=/opt/pubdex-build "
          "python -I /opt/pubdex-build/fetch_verified.py wheels --dest /wheelhouse --allow-source psycopg-c "
          "/opt/pubdex-build/requirements-pip.txt /opt/pubdex-build/requirements-build.txt "
          "/opt/pubdex-build/requirements.txt")
 #: How the steps that install begin: no network, the scripts and the
 #: verified files mounted, never copied.
-OFFLINE = "RUN --network=none --mount=type=bind,source=DB,target=/opt/pubdex-build " \
+OFFLINE = "RUN --network=none --mount=type=bind,from=build-files,target=/opt/pubdex-build " \
           "--mount=type=bind,from=wheels,source=/wheelhouse,target=/wheelhouse "
 
 
@@ -201,11 +238,23 @@ def _install_step() -> str:
     return next(run for run in _stages()[""] if "/opt/pubdex/requirements.txt" in run and run.startswith("RUN"))
 
 
+def test_the_build_steps_mount_only_the_locks_and_the_scripts_that_fetch_and_install_them() -> None:
+    # A stage of their own, from scratch, holding these seven files and
+    # nothing else: a change to the package or the schema leaves the
+    # download, the compile and the install cached. Every bind mount of the
+    # Dockerfile comes from an earlier stage, none from the build context.
+    assert _stages()["build-files"] == ["COPY " + " ".join(BUILD_FILES) + " /"]
+    assert re.search(r"^FROM scratch AS build-files$", DOCKERFILE, re.M)
+    mounts = re.findall(r"--mount=type=bind,(\S+)", re.sub(r"\\\n\s*", " ", DOCKERFILE))
+    assert mounts and all(mount.startswith("from=") for mount in mounts), mounts
+    assert mounts.count("from=build-files,target=/opt/pubdex-build") == 3
+
+
 def test_the_downloads_are_a_stage_of_their_own_and_no_pip_downloads() -> None:
     stages = _stages()
     assert stages["wheels"] == [FETCH]
     joined = re.sub(r"\\\n\s*", " ", DOCKERFILE)
-    instructions = " ".join(" ".join(words) for words in _instructions())
+    instructions = " ".join(" ".join(words) for words in _instructions() if words[0] != "COPY")
     assert instructions.count("fetch_verified.py") == 1
     for downloader in ("curl", "wget", "pip download", "pip install", "ADD "):
         assert downloader not in joined.replace("--mount", ""), downloader
@@ -250,7 +299,7 @@ def test_pip_and_the_runtime_lock_are_installed_without_network_from_the_verifie
             if run.startswith("RUN") and re.search(r"pip|install_locked|install_pip", run) and run != FETCH:
                 assert run.startswith("RUN --network=none "), run
     # The scripts are mounted, never copied, so the image does not hold them.
-    copied = " ".join(" ".join(words[1:-1]) for words in _instruction("COPY"))
+    copied = " ".join(" ".join(words[1:-1]) for words in _image_copies())
     assert not any(Path(script).name in copied for script in BUILD_SCRIPTS)
     for workflow in (".github", ".forgejo"):
         text = (ROOT / workflow / "workflows" / "db-tests.yml").read_text(encoding="utf-8")
@@ -451,15 +500,15 @@ def _mapping(block: List[str], key: str) -> Dict[str, str]:
     return dict(item.split(": ", 1) for item in items)
 
 
-SERVICES = ("bootstrap", "postgres", "api", "ingest", "demo")
+SERVICES = ("bootstrap", "postgres", "schema-upgrade", "api", "ingest", "demo")
 
 
 def postgres_text() -> str:
     return "\n".join(["  postgres:"] + _block(COMPOSE, "postgres", 2))
 
 
-def test_the_stack_has_its_five_services_and_names_nothing_globally() -> None:
-    services = [line.strip()[:-1] for line in _block(COMPOSE, "services", 0) if re.fullmatch(r"  [a-z]+:", line)]
+def test_the_stack_has_its_six_services_and_names_nothing_globally() -> None:
+    services = [line.strip()[:-1] for line in _block(COMPOSE, "services", 0) if re.fullmatch(r"  [a-z-]+:", line)]
     assert services == list(SERVICES)
     for forbidden in ("container_name", "privileged", "external:", "extra_hosts"):
         assert forbidden not in COMPOSE
@@ -525,6 +574,35 @@ def test_postgresql_is_pinned_published_nowhere_and_bootstraps_from_the_image() 
     assert "pg_isready -q -h 127.0.0.1" in health and "rolpassword LIKE 'SCRAM-SHA-256$$%'" in health
 
 
+def test_the_schema_upgrade_runs_as_the_superuser_with_that_credential_only_before_the_application() -> None:
+    upgrade = _block(COMPOSE, "schema-upgrade", 2)
+    # The image's hardening, as the other one-shot service's; the default
+    # network, to reach PostgreSQL, and no port.
+    assert "    <<: *application-image" in upgrade
+    assert '    command: ["python", "-m", "people_pubs.schema", "upgrade"]' in upgrade
+    assert '    restart: "no"' in upgrade
+    assert _list(upgrade, "secrets") == ["postgres_password"], "the superuser's password file and no other"
+    environment = _mapping(upgrade, "environment")
+    assert sorted(environment) == ["PEOPLE_DB_PASSWORD_FILE", "PGDATABASE", "PGHOST", "PGPORT", "PGUSER"]
+    assert environment["PGHOST"] == "postgres" and environment["PGDATABASE"] == "people_db"
+    assert environment["PGUSER"] == "postgres", "the owner of the schema, whose default privileges apply"
+    assert environment["PEOPLE_DB_PASSWORD_FILE"] == "/run/secrets/postgres_password"
+    assert '      PGPORT: "5432"' in upgrade
+    depends = [line.strip() for line in _block("\n".join(["  schema-upgrade:"] + upgrade), "depends_on", 4)]
+    assert depends == ["postgres:", "condition: service_healthy"]
+    for absent in ("ports", "volumes", "network_mode", "networks", "profiles", "user"):
+        assert not any(line.strip().startswith(f"{absent}:") for line in upgrade), absent
+    # The superuser's password file reaches PostgreSQL and the schema upgrade
+    # only; every service that uses the database waits for the upgrade.
+    holders = [service for service in SERVICES if "postgres_password" in (_list(_block(COMPOSE, service, 2), "secrets") or [])]
+    assert holders == ["postgres", "schema-upgrade"]
+    assert "postgres_password" not in (_list(_block(COMPOSE, "x-ingestion", 0), "secrets") or [])
+    for service in ("api", "ingest", "demo"):
+        block = _block(COMPOSE, service, 2)
+        assert "    <<: *application" in block or "    <<: *ingestion" in block, service
+        assert not any(line.strip().startswith("depends_on:") for line in block), f"{service} keeps x-application's"
+
+
 def test_the_read_service_has_only_the_read_credential_and_a_loopback_port() -> None:
     api = _block(COMPOSE, "api", 2)
     assert "    <<: *application" in api
@@ -561,7 +639,8 @@ def test_the_application_containers_are_locked_down() -> None:
     assert _list(application, "security_opt") == ["no-new-privileges:true"]
     assert _list(application, "tmpfs") == ["/tmp"]
     assert _block(COMPOSE, "x-application", 0) == [
-        "  <<: *application-image", "  depends_on:", "    postgres:", "      condition: service_healthy"]
+        "  <<: *application-image", "  depends_on:", "    postgres:", "      condition: service_healthy",
+        "    schema-upgrade:", "      condition: service_completed_successfully"]
 
 
 def test_the_secret_files_come_from_one_configurable_directory() -> None:
@@ -636,7 +715,8 @@ def test_the_postgresql_images_inputs_are_fixed_by_digest_and_hash() -> None:
     assert re.fullmatch(r"16\.\d+", _arg("PG_VERSION", POSTGRES_DOCKERFILE))
     assert re.fullmatch(r"[0-9a-f]{64}", _arg("PG_SHA256", POSTGRES_DOCKERFILE))
     froms = [line.split()[1] for line in POSTGRES_DOCKERFILE.splitlines() if line.startswith("FROM ")]
-    assert froms == ["${PYTHON_BASE}", "${POSTGRES_ENTRYPOINT_IMAGE}", "${DEBIAN_BASE}", "build", "${DEBIAN_BASE}"]
+    assert froms == ["${PYTHON_BASE}", "${POSTGRES_ENTRYPOINT_IMAGE}", "${DEBIAN_BASE}", "build", "build",
+                     "${DEBIAN_BASE}"]
     # The source by hash, over HTTPS, with the repository's downloader.
     fetch = next(run for run in _stages(POSTGRES_DOCKERFILE)["source"] if run.startswith("RUN"))
     assert 'fetch_verified.py url --sha256 "${PG_SHA256}" "https://ftp.postgresql.org/pub/source/' in fetch
@@ -688,6 +768,29 @@ def test_the_postgresql_images_build_context_is_an_allowlist_of_the_downloader()
     assert copies == [f"COPY {ENTRYPOINT_LICENSE} /src/docker-library-postgres-LICENSE"]
     assert not any(line.startswith("COPY ") and not line.startswith("COPY --from=")
                    for line in _stages(POSTGRES_DOCKERFILE)[""])
+
+
+def test_each_image_carries_the_packages_its_c_code_was_compiled_with() -> None:
+    # The stage that compiled psycopg-c, and the one that compiled
+    # PostgreSQL, each list their packages in a stage of their own after the
+    # compilation, so that the list never invalidates it; the image copies
+    # the list where release.sh reads it, whether or not the build took the
+    # compilation from the cache.
+    app, pg = _stages(), _stages(POSTGRES_DOCKERFILE)
+    assert app["build-packages"] == [BUILD_PACKAGES] and pg["build-packages"] == [BUILD_PACKAGES]
+    assert re.search(r"^FROM psycopg-c AS build-packages$", DOCKERFILE, re.M)
+    assert re.search(r"^FROM build AS build-packages$", POSTGRES_DOCKERFILE, re.M)
+    assert BUILD_PACKAGES_COPY in _image_copies()
+    assert ("COPY --from=build-packages /build-packages.txt /usr/share/doc/pubdex-postgres/build-packages.txt"
+            in pg[""])
+    # After the step that installs the lock, so a change of the list's stage
+    # leaves that step cached.
+    image = app[""]
+    install = next(i for i, line in enumerate(image) if "install_locked.py" in line)
+    assert image.index(" ".join(BUILD_PACKAGES_COPY)) > install
+    release = (ROOT / "release.sh").read_text(encoding="utf-8")
+    assert "doc=/usr/share/doc/pubdex" in release and "doc=/usr/share/doc/pubdex-postgres" in release
+    assert 'cat "$doc/build-packages.txt"' in release
 
 
 def test_the_postgresql_image_carries_the_notices_its_licences_ask_for() -> None:

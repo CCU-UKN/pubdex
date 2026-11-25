@@ -6,7 +6,7 @@
 # Build it with ./build_image.sh, which also records the release version and
 # the source revision in the labels below (DEPLOYMENT.md, "The application
 # image"). Of BuildKit's additions to the Dockerfile syntax it uses
-# RUN --mount=type=bind, from the build context and from an earlier stage,
+# RUN --mount=type=bind from an earlier stage,
 # and RUN --network=none, all part of the Dockerfile syntax that Docker
 # Engine's BuildKit supports. Which Engines the deployment supports, to build
 # as to run, DB/lib/docker_versions.sh decides. Only linux/amd64 images are
@@ -17,6 +17,7 @@
 #   python -m people_pubs.sync.<command> [...]    an ingestion command
 #   python -m people_pubs.api.probe [--live]      the read service's health check
 #   python -m people_pubs.bootstrap <directory>   copies the schema bootstrap there
+#   python -m people_pubs.schema upgrade|status   the schema upgrade, or its report
 #
 # The image holds no credential and reads no .env file. The read service takes
 # its database password from the file PEOPLE_PUBS_API_DB_PASSWORD_FILE names,
@@ -29,7 +30,13 @@
 # for compiling psycopg-c against libpq and, at run time, Debian's libpq, from
 # the base image's signed Debian archive; and exactly the files .dockerignore
 # lets into the build context, each copied below, but the scripts in DB/ that
-# fetch and install the locks, which the build runs without copying them.
+# fetch and install the locks, which the build runs without copying them into
+# the image.
+#
+# The three locks and the four scripts that fetch and install them form a
+# stage of their own, build-files, which the steps below mount; it holds
+# nothing else, so a change elsewhere in the build context -- to the package,
+# say -- leaves those steps cached and needs no package index.
 #
 # Three stages keep downloading, compiling and installing apart:
 #   wheels     DB/fetch_verified.py downloads exactly one file per pin of
@@ -50,8 +57,13 @@
 
 ARG PYTHON_BASE=python:3.11.18-slim-trixie@sha256:82209229d3fda30d71e603ec95bb4bea0476635ba6df3df2e32284e036654f51
 
+FROM scratch AS build-files
+COPY DB/requirements-pip.txt DB/requirements-build.txt DB/requirements.txt \
+     DB/fetch_verified.py DB/install_pip.py DB/install_locked.py DB/locked_files.py \
+     /
+
 FROM ${PYTHON_BASE} AS wheels
-RUN --mount=type=bind,source=DB,target=/opt/pubdex-build \
+RUN --mount=type=bind,from=build-files,target=/opt/pubdex-build \
     python -I /opt/pubdex-build/fetch_verified.py wheels --dest /wheelhouse --allow-source psycopg-c \
       /opt/pubdex-build/requirements-pip.txt /opt/pubdex-build/requirements-build.txt \
       /opt/pubdex-build/requirements.txt
@@ -62,10 +74,20 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/* \
  && dpkg-query -W gcc libc6-dev libpq-dev libpq5
 RUN --network=none \
-    --mount=type=bind,source=DB,target=/opt/pubdex-build \
+    --mount=type=bind,from=build-files,target=/opt/pubdex-build \
     --mount=type=bind,from=wheels,source=/wheelhouse,target=/wheelhouse \
     python -I /opt/pubdex-build/install_locked.py --wheelhouse /wheelhouse --network-isolation required \
       --build-only /psycopg-c /opt/pubdex-build/requirements.txt
+
+# The packages of the stage that compiled psycopg-c -- the compiler, the C
+# library's and libpq's headers and everything else installed there -- one
+# "<package> <version>" a line, sorted. The image carries the list in
+# /usr/share/doc/pubdex/build-packages.txt, from which release.sh's
+# provenance record takes it: the build log shows the list only when the
+# step above runs, not when it comes from the build cache, and the image's
+# own package database names only what the image runs with.
+FROM psycopg-c AS build-packages
+RUN dpkg-query -W -f '${Package} ${Version}\n' | LC_ALL=C sort > /build-packages.txt
 
 FROM ${PYTHON_BASE}
 
@@ -104,7 +126,7 @@ RUN apt-get update \
 # pip and those wheels, which the later layer hides from every container.
 COPY DB/requirements-pip.txt DB/requirements.txt /opt/pubdex/
 RUN --network=none \
-    --mount=type=bind,source=DB,target=/opt/pubdex-build \
+    --mount=type=bind,from=build-files,target=/opt/pubdex-build \
     --mount=type=bind,from=wheels,source=/wheelhouse,target=/wheelhouse \
     --mount=type=bind,from=psycopg-c,source=/psycopg-c,target=/psycopg-c \
     python /opt/pubdex-build/install_pip.py --wheelhouse /wheelhouse --lock /opt/pubdex/requirements-pip.txt \
@@ -125,6 +147,9 @@ RUN groupadd --gid 10001 pubdex \
  && useradd --uid 10001 --gid pubdex --no-create-home --home-dir /nonexistent \
       --shell /usr/sbin/nologin pubdex \
  && install -d -o 10001 -g 10001 -m 755 /var/lib/pubdex/initdb
+
+# The packages psycopg-c was compiled with (stage build-packages).
+COPY --from=build-packages /build-packages.txt /usr/share/doc/pubdex/build-packages.txt
 
 # What COPY adds belongs to root, with the file modes of the checkout; the
 # step after the last COPY sets them.
@@ -147,6 +172,10 @@ COPY DB/init/000_init.sql \
      DB/init/011_member_info_manual.sql \
      DB/init/020_role_passwords.sh \
      /opt/pubdex/init/
+# The schema changes, where people_pubs.schema looks for them: schema/ next
+# to the package. The schema upgrade applies those a database has not had
+# yet; .dockerignore lets in every .sql file of DB/schema/ and nothing else.
+COPY DB/schema /opt/pubdex/schema
 # The Compose files this image is released with, the script that creates
 # their secret files and the one that gives the database the files'
 # passwords, so that a deployment can be set up and run from the image alone
@@ -184,12 +213,15 @@ CMD ["python", "-m", "people_pubs.api"]
 # Set by ./build_image.sh. A plain `docker build` leaves them "unknown"
 # rather than guessing. The release version is the repository's VERSION
 # file; the transform version is people_pubs.__version__, the stamp ingestion
-# writes into source provenance; they are independent.
+# writes into source provenance; they are independent. The release version
+# is also in the environment, where the schema upgrade reads it to record
+# which release applied each schema change.
 ARG PEOPLE_PUBS_VERSION=unknown
 ARG PEOPLE_PUBS_REVISION=unknown
 ARG PEOPLE_PUBS_CREATED=unknown
 ARG PEOPLE_PUBS_TRANSFORM_VERSION=unknown
 ARG PEOPLE_PUBS_SOURCE=
+ENV PEOPLE_PUBS_VERSION=${PEOPLE_PUBS_VERSION}
 LABEL org.opencontainers.image.title="PubDex" \
       org.opencontainers.image.description="Ingestion commands, read service, database schema bootstrap and Compose files of PubDex, an auditable record of what the people of a research organisation have published" \
       org.opencontainers.image.licenses="MIT AND CC-BY-4.0" \

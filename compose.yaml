@@ -21,10 +21,16 @@
 # the image carries -- the files of DB/init/ -- into a volume of its own. On an
 # empty database volume PostgreSQL runs those files and gives the application
 # roles their passwords from the secret files; on a volume with data it does
-# neither, so a restart, a new container or another image changes no schema,
-# data or password. set_passwords.sh changes the passwords later, after a
-# secret file changed. `docker compose down` stops and removes the containers
-# and keeps the database; only `docker compose down --volumes` deletes it.
+# neither. Once PostgreSQL is healthy, the one-shot service schema-upgrade
+# applies the schema changes the image carries that the database has not had
+# yet -- on a new volume all of them, after a change to a newer image that
+# image's new ones, otherwise none -- and the read service, ingestion and the
+# demonstration start only after it has succeeded. So a restart or a new
+# container changes no schema, data or password, and another image changes
+# the schema only by its schema changes. set_passwords.sh changes the
+# passwords later, after a secret file changed. `docker compose down` stops
+# and removes the containers and keeps the database; only
+# `docker compose down --volumes` deletes it.
 #
 # Portable defaults: no fixed container, network or volume name -- every
 # resource belongs to the Compose project, named after this directory unless
@@ -38,11 +44,11 @@
 #
 # Settings, all optional, from the environment or a .env file next to this
 # file (DEPLOYMENT.md, "Settings"):
-#   PEOPLE_PUBS_IMAGE            the application image (ghcr.io/ccu-ukn/pubdex:0.1.0,
+#   PEOPLE_PUBS_IMAGE            the application image (ghcr.io/ccu-ukn/pubdex:0.2.0,
 #                                the release of this file), pulled only when
 #                                Docker does not have it; <name>:<tag>@sha256:<digest>
 #                                pins the release's image exactly
-#   PEOPLE_PUBS_POSTGRES_IMAGE   the PostgreSQL image (ghcr.io/ccu-ukn/pubdex-postgres:0.1.0,
+#   PEOPLE_PUBS_POSTGRES_IMAGE   the PostgreSQL image (ghcr.io/ccu-ukn/pubdex-postgres:0.2.0,
 #                                the release of this file), pulled and pinned
 #                                the same way
 #   PEOPLE_PUBS_HTTP_ADDRESS     host address the read service is published on (127.0.0.1)
@@ -58,7 +64,7 @@
 # passes signals on and reaps child processes, a read-only root file system
 # with a private /tmp, and no capabilities.
 x-application-image: &application-image
-  image: ${PEOPLE_PUBS_IMAGE:-ghcr.io/ccu-ukn/pubdex:0.1.0}
+  image: ${PEOPLE_PUBS_IMAGE:-ghcr.io/ccu-ukn/pubdex:0.2.0}
   pull_policy: missing
   init: true
   read_only: true
@@ -69,12 +75,15 @@ x-application-image: &application-image
   security_opt:
     - no-new-privileges:true
 
-# The read service and ingestion: also a database that is ready.
+# The read service and ingestion: also a database that is ready and has the
+# schema of the image.
 x-application: &application
   <<: *application-image
   depends_on:
     postgres:
       condition: service_healthy
+    schema-upgrade:
+      condition: service_completed_successfully
 
 # One-shot ingestion as app_writer, with that role's password file and no
 # other credential.
@@ -110,7 +119,7 @@ services:
   # postgres image that earlier releases ran (postgres.Dockerfile), so the
   # settings, volume and health check below are unchanged.
   postgres:
-    image: ${PEOPLE_PUBS_POSTGRES_IMAGE:-ghcr.io/ccu-ukn/pubdex-postgres:0.1.0}
+    image: ${PEOPLE_PUBS_POSTGRES_IMAGE:-ghcr.io/ccu-ukn/pubdex-postgres:0.2.0}
     pull_policy: missing
     restart: unless-stopped
     environment:
@@ -166,6 +175,31 @@ services:
       retries: 3
       start_period: 60s
       start_interval: 2s
+
+  # Brings the database to the schema of the image: applies the schema
+  # changes the image carries -- /opt/pubdex/schema, the files of DB/schema/
+  # -- that the database has not had yet, in order, each in a transaction of
+  # its own, records them in pubdex.schema_changes and exits; with nothing
+  # outstanding it changes nothing. It runs on every start, once PostgreSQL
+  # is healthy, as the superuser postgres, who owns the schema, with that
+  # role's password file and no other credential. When it fails, the read
+  # service, ingestion and the demonstration do not start, and
+  # `docker compose ps --all` and `docker compose logs schema-upgrade` say why.
+  schema-upgrade:
+    <<: *application-image
+    command: ["python", "-m", "people_pubs.schema", "upgrade"]
+    restart: "no"
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: people_db
+      PGUSER: postgres
+      PEOPLE_DB_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   # The read service, as app_readonly, with that role's password file only.
   api:

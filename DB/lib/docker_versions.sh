@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # The Docker versions the deployment needs, and how a reported version is
-# compared with them; shared by run_ci_suite.sh, run_stack_acceptance.sh and
-# run_operator_acceptance.sh.
+# compared with them; shared by run_ci_suite.sh, run_stack_acceptance.sh,
+# run_operator_acceptance.sh and run_release_rehearsal.sh.
 # Sourced, not run.
 #
 # Docker Compose 2.24.0 is the first release that starts compose.yaml as it is

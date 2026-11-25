@@ -6,8 +6,9 @@ file system, writing only to volumes of its own. The chart takes no password
 and renders no Secret: each container receives exactly the keys of the
 operator's Secret that chart.CONTAINERS lists for it, as files readable by
 its group, and no credential reaches an environment variable or a setting.
-In external mode only the setup Job's container receives the admin
-Secret's key.
+In external mode only the containers of the two hook Jobs that run as the
+admin role, the setup and the schema upgrade, receive the admin Secret's
+key.
 """
 from __future__ import annotations
 
@@ -184,7 +185,7 @@ def test_credentials_reach_each_container_only_as_files_of_its_own_keys(helm, ca
             by_secret: dict = {}
             for secret_name, key in files.values():
                 by_secret.setdefault(secret_name, []).append(key)
-            assert sorted(by_secret.pop(credentials, [])) == sorted(entitled.secret_keys), name
+            assert sorted(by_secret.pop(credentials, [])) == sorted(entitled.keys_in(values)), name
             if entitled.admin and setup_enabled(values):
                 assert by_secret.pop(admin["name"], []) == [admin["key"]], f"{name}: the admin password"
             if entitled.connects and ca and ca[0] == "secret":

@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
 # Prepares a database on a PostgreSQL 16 server that the chart does not run
 # -- its external mode -- for PubDex, as a role that need not be a
-# superuser: the schema the application image carries, the passwords of the
-# two application roles, and who may connect to the database.
+# superuser: the baseline schema the application image carries, the
+# passwords of the two application roles, and who may connect to the
+# database. The schema changes of the image follow, as the same role, with
+# the schema upgrade, python -m people_pubs.schema upgrade.
 #
 # The chart runs it in its setup Job before each helm install and helm
-# upgrade (templates/external-setup-job.yaml). With
-# externalDatabase.setup.enabled=false an operator runs it by hand instead,
-# the same way (KUBERNETES.md). It runs in the release's PostgreSQL
-# image, which has psql and setsid, as any user.
+# upgrade (templates/external-setup-job.yaml), and the schema upgrade in a
+# Job after it (templates/schema-upgrade-job.yaml). With
+# externalDatabase.setup.enabled=false an operator runs both by hand
+# instead, the same way (KUBERNETES.md). This script runs in the release's
+# PostgreSQL image, which has psql and setsid, as any user.
 #
 # It reads everything from its environment:
 #
@@ -57,14 +60,17 @@
 #        PGUSER lacks the ADMIN OPTION on app_readonly or app_writer that
 #        setting their passwords needs;
 #      - an extension cannot be created, or lies outside schema public.
-#   3. On a database without the PubDex schema, the schema's SQL files run
-#      in one transaction, so a failure leaves nothing behind; maintenance,
-#      which the chart does not use, loses its login in the same
-#      transaction. Three lines of 000_init.sql are left out: they need a
-#      superuser or a role named postgres, and change nothing that this
+#   3. On a database without the PubDex schema, the SQL files of the
+#      baseline run in one transaction, so a failure leaves nothing behind;
+#      maintenance, which the chart does not use, loses its login in the
+#      same transaction. Three lines of 000_init.sql are left out: they need
+#      a superuser or a role named postgres, and change nothing that this
 #      setup depends on (EXTERNAL_SETUP_LEFT_OUT below). On a database that
-#      holds the schema this step is skipped: that is what makes a second
-#      run, for example at the next helm upgrade, safe.
+#      holds the baseline, with or without schema changes since, this step
+#      is skipped: that is what makes a second run, for example at the next
+#      helm upgrade, safe. Which schema changes are outstanding is not this
+#      script's to decide: the schema upgrade after it reads the database's
+#      record of them and applies what is missing.
 #   4. In one transaction, every time: app_readonly and app_writer get the
 #      passwords of their files, and only they, besides the owner, may
 #      connect to the database or create temporary objects in it: CONNECT
@@ -118,12 +124,13 @@ external_setup_usage() {
 usage: external-setup.sh
 
 Prepares the database PGDATABASE on the PostgreSQL 16 server PGHOST:PGPORT
-for PubDex, as the role PGUSER: the schema of PEOPLE_PUBS_SETUP_INIT_DIR
-once, then on every run the passwords of app_readonly and app_writer from
-PEOPLE_PUBS_APP_READONLY_PASSWORD_FILE and PEOPLE_PUBS_APP_WRITER_PASSWORD_FILE
-and the database's CONNECT privilege. PGUSER's password is read from
-PEOPLE_PUBS_SETUP_ADMIN_PASSWORD_FILE. The header of this script lists every
-check and step.
+for PubDex, as the role PGUSER: the baseline schema of
+PEOPLE_PUBS_SETUP_INIT_DIR once, then on every run the passwords of
+app_readonly and app_writer from PEOPLE_PUBS_APP_READONLY_PASSWORD_FILE and
+PEOPLE_PUBS_APP_WRITER_PASSWORD_FILE and the database's CONNECT privilege.
+PGUSER's password is read from PEOPLE_PUBS_SETUP_ADMIN_PASSWORD_FILE. The
+schema upgrade of the application image, as the same role, comes next. The
+header of this script lists every check and step.
 USAGE
 }
 
@@ -533,7 +540,7 @@ external_setup_main() {
   if [ "$EXTERNAL_SETUP_STATE" = absent ]; then
     external_setup_apply_schema "$PEOPLE_PUBS_SETUP_INIT_DIR" "$EXTERNAL_SETUP_WORK"
   else
-    external_setup_say "the database holds the PubDex schema already; the schema step is skipped"
+    external_setup_say "the database holds the PubDex baseline already; this step is skipped, and the schema upgrade decides which schema changes are outstanding"
   fi
   # Steps 4 and 5.
   external_setup_set_passwords
@@ -542,7 +549,7 @@ external_setup_main() {
   EXTERNAL_SETUP_ADMIN_PASSWORD=""
   EXTERNAL_SETUP_READONLY_PASSWORD=""
   EXTERNAL_SETUP_WRITER_PASSWORD=""
-  external_setup_say "app_readonly and app_writer each authenticated a new connection by SCRAM; the database $PGDATABASE is ready for PubDex"
+  external_setup_say "app_readonly and app_writer each authenticated a new connection by SCRAM; the database $PGDATABASE is prepared, and the schema upgrade comes next"
 }
 
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then

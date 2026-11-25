@@ -65,6 +65,15 @@ class Container:
     writable: FrozenSet[str]  # where it may write, exactly; its root file system is read-only
     admin: bool = False  # mounts the external server's admin Secret (externalDatabase.setup.adminSecret)
     connects: bool = False  # connects to an external server, so mounts its CA certificate when one is set
+    # The keys of the operator's Secret it mounts in external mode, where
+    # they differ from secret_keys; None when they do not.
+    external_secret_keys: Optional[FrozenSet[str]] = None
+
+    def keys_in(self, values: dict) -> FrozenSet[str]:
+        """The keys of the operator's Secret it mounts with these values."""
+        if values["mode"] == "external" and self.external_secret_keys is not None:
+            return self.external_secret_keys
+        return self.secret_keys
 
 
 # Every container the chart renders, by (component label, container name).
@@ -91,6 +100,13 @@ CONTAINERS: Dict[Tuple[str, str], Container] = {
                                             connects=True),
     # helm test's pod, a client of the read service without any credential.
     ("test", "test"): Container("image", frozenset(), frozenset({"/tmp"})),
+    # The schema upgrade: as postgres with that role's key in evaluation
+    # mode, as the admin role with the admin Secret's key alone in external
+    # mode.
+    ("schema-upgrade", "schema-upgrade"): Container(
+        "image", frozenset({"postgres_password"}), frozenset({"/tmp"}), admin=True, connects=True,
+        external_secret_keys=frozenset(),
+    ),
 }
 
 # The synthetic roster of the demonstration, which the image carries; the

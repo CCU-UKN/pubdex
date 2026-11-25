@@ -42,6 +42,26 @@ The ServiceAccount of the ingestion pods, and the prefix of their CronJobs.
 {{- end -}}
 
 {{/*
+The schema upgrade's ServiceAccount, and its Job in external mode, a hook
+that every run of the setup creates again. In evaluation mode the Job is a
+resource of each revision, <release>-schema-upgrade-<revision>: a Job's pod
+template cannot change, so each revision has a Job of its own. With a release
+name of 40 characters at most, that name stays within the 63 characters of
+the label the Job controller puts on its pods up to revision 9999999.
+*/}}
+{{- define "pubdex.schemaUpgradeName" -}}
+{{- printf "%s-schema-upgrade" (include "pubdex.fullname" .) -}}
+{{- end -}}
+
+{{- define "pubdex.schemaUpgradeJobName" -}}
+{{- if eq .Values.mode "external" -}}
+{{- include "pubdex.schemaUpgradeName" . -}}
+{{- else -}}
+{{- printf "%s-%d" (include "pubdex.schemaUpgradeName" .) (.Release.Revision | int) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 The ConfigMap with the specification of the attached one-off pod, and the
 name that pod gets.
 */}}
@@ -62,7 +82,7 @@ The components whose pods connect to the database. Evaluation mode's
 NetworkPolicy admits exactly these to PostgreSQL.
 */}}
 {{- define "pubdex.databaseClients" -}}
-{{- list "api" "demo" "ingest" | toJson -}}
+{{- list "api" "demo" "ingest" "schema-upgrade" | toJson -}}
 {{- end -}}
 
 {{/*
@@ -124,7 +144,7 @@ create it; external mode needs only the keys of the two application roles.
 {{- range $keys -}}
 {{- $files = append $files (printf "--from-file=secrets/%s" .) -}}
 {{- end -}}
-{{- $help := printf `secrets.name is required: the name of an existing Secret in namespace %s with the keys %s. Create the files with ./create_secrets.sh, then the Secret:
+{{- $help := printf `secrets.name is required: the name of an existing Secret in namespace %s with the keys %s. Create the files with create_secrets.sh -- in the root of the PubDex source of this chart's version, or /opt/pubdex/create_secrets.sh in the application image: bash create_secrets.sh -- then the Secret:
   kubectl create secret generic pubdex-credentials --namespace %s %s
 and name it with --set secrets.name=pubdex-credentials` .Release.Namespace (join ", " $keys) .Release.Namespace (join " " $files) -}}
 {{- required $help .Values.secrets.name -}}

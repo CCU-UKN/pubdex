@@ -12,9 +12,10 @@ the passwords and a password login. That proves, without a database:
   CREATEROLE or ownership, part of the schema, the roles of another
   installation, missing ADMIN OPTION, extensions it cannot create; and
   before the server is even contacted, unusable or shared password files;
-- that a database without the schema gets it in one transaction, from the
-  files in name order and 000_init.sql without exactly its three lines, and
-  a database with it skips that step;
+- that a database without the schema gets the baseline in one transaction,
+  from the files in name order and 000_init.sql without exactly its three
+  lines, and a database with it skips that step and leaves the schema
+  changes to the schema upgrade that follows;
 - that both passwords reach psql only on its input, for \\password, the
   admin's only through a password file of mode 0600 that is removed
   afterwards, and none on a command line, in the environment or in the
@@ -336,7 +337,10 @@ def test_a_database_without_the_schema_is_prepared_in_order(run: Run) -> None:
             "sslmode verify-full, TLS TLSv1.3") in out
     assert "applied the schema in one transaction: 000_init.sql 010_ingestion_runtime_schema.sql " \
            "011_member_info_manual.sql (3 line(s) of 000_init.sql left out)" in out
-    assert "each authenticated a new connection by SCRAM; the database people_db is ready" in out
+    # The schema changes are the schema upgrade's, which runs after it.
+    assert ("each authenticated a new connection by SCRAM; the database people_db is prepared, "
+            "and the schema upgrade comes next") in out
+    assert "people_pubs.schema" not in "\n".join(" ".join(call) for call in calls)
     assert "a notice that is not shown" not in proc.stdout + proc.stderr
     _no_password_leaves(run, proc)
     assert "example-ambient-0b1c" not in run.read("env.1"), "PGPASSWORD is not used"
@@ -387,10 +391,13 @@ def test_every_usable_password_reaches_psql_exactly(run: Run, content: bytes, pa
 
 
 def test_a_database_with_the_schema_skips_the_schema_step(run: Run) -> None:
+    # The baseline only: whether schema changes are outstanding is the
+    # schema upgrade's to decide, which runs after this script.
     run.facts(INITIALISED)
     proc = run()
     assert proc.returncode == 0, proc.stderr
-    assert "the database holds the PubDex schema already; the schema step is skipped" in proc.stdout
+    assert ("the database holds the PubDex baseline already; this step is skipped, and the schema upgrade "
+            "decides which schema changes are outstanding") in proc.stdout
     calls = run.psql_calls()
     assert len(calls) == 4 and not any("ALTER ROLE maintenance NOLOGIN PASSWORD NULL" in call for call in calls)
     assert not (run.state / "schema.files").exists()

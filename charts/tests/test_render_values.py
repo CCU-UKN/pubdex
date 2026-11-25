@@ -104,6 +104,13 @@ REFUSED = {
                                                ["names the Secret of secrets.name"]),
     "admin-is-an-application-role": ([*EXTERNAL, "--set", "externalDatabase.setup.adminUser=app_writer"],
                                      ["at '/externalDatabase/setup/adminUser'", "'not' failed"]),
+    # The schema upgrade: its resources, nothing else, and no password.
+    "schema-upgrade-unknown-key": (["--set", "schemaUpgrade.waitSeconds=10"],
+                                   ["at '/schemaUpgrade'", "additional properties 'waitSeconds' not allowed"]),
+    "schema-upgrade-password-key": (["--set", "schemaUpgrade.adminPassword=x"],
+                                    ["at '/schemaUpgrade'", "additional properties 'adminPassword' not allowed"]),
+    "schema-upgrade-resources-not-a-map": (["--set", "schemaUpgrade.resources=1"],
+                                           ["at '/schemaUpgrade/resources'", "got number, want object"]),
     # The demonstration, ingestion and the roster.
     "demo-in-external-mode": ([*EXTERNAL, "--set", "demo.enabled=true"],
                               ["demo.enabled is for evaluation mode only", "writes synthetic records"]),
@@ -212,14 +219,16 @@ ACCEPTED = {
     "external-superuser-named-postgres": [*EXTERNAL, "--set", "externalDatabase.setup.adminUser=postgres"],
     "pull-secret": ["--set", "imagePullSecrets[0].name=registry-credentials"],
     "tag-only": ["--set", "image.digest=", "--set", "postgresImage.digest="],
-    "digest-only": ["--set", "image.tag=", "--set", "postgresImage.tag="],
+    "digest-only": ["--set", "image.tag=", "--set", "postgresImage.tag=",
+                    "--set", "image.digest=sha256:" + "1" * 64, "--set", "postgresImage.digest=sha256:" + "2" * 64],
     "no-registry": ["--set", "image.registry=", "--set", "image.repository=pubdex", "--set", "image.tag=local",
                     "--set", "image.digest=", "--set", "image.pullPolicy=Never"],
     "longest-wait": ["--set", "api.dbWaitSeconds=300"],
     "no-replicas": ["--set", "api.replicas=0"],
     "volume-deleted-on-uninstall": ["--set", "postgresql.persistence.retainOnUninstall=false"],
     "named-storage-class": ["--set", "postgresql.persistence.storageClass=standard"],
-    "no-resources": ["--set-json", "api.resources={}", "--set-json", "postgresql.resources={}"],
+    "no-resources": ["--set-json", "api.resources={}", "--set-json", "postgresql.resources={}",
+                     "--set-json", "schemaUpgrade.resources={}"],
     "demo": ["--set", "demo.enabled=true"],
     "task-on-demand": _task(["python", "-m", "people_pubs.sync.attribution_rules", "list"]),
     "task-scheduled-by-macro": _task(["python", "-m", "people_pubs.sync.orcid_works"], schedule="@weekly"),
@@ -263,7 +272,10 @@ def test_rendering_without_the_secret_name_says_how_to_create_the_secret(helm) -
     # helm lint does not apply `required`, so this is checked here.
     refusal = helm.refusal()
     assert "secrets.name is required" in refusal
-    assert "./create_secrets.sh" in refusal
+    # The script is not in the chart: the message says where it is.
+    assert ("create_secrets.sh -- in the root of the PubDex source of this chart's version, or "
+            "/opt/pubdex/create_secrets.sh in the application image: bash create_secrets.sh") in refusal
+    assert "./create_secrets.sh" not in refusal
     assert "kubectl create secret generic pubdex-credentials --namespace chart-checks" in refusal
     for key in ("postgres_password", "app_readonly_password", "app_writer_password"):
         assert f"--from-file=secrets/{key}" in refusal

@@ -5,11 +5,11 @@ description: >-
   have published: its read service and, for evaluation, a PostgreSQL 16
   database of its own, from the release images.
 type: application
-# The chart's own version, independent of the application's.
-version: 0.1.0
+# One PubDex version identifies the chart and the application images.
+version: 0.2.0
 # The application release whose images the chart uses by default (values.yaml,
 # image and postgresImage).
-appVersion: "0.1.0"
+appVersion: "0.2.0"
 kubeVersion: ">=1.35.0-0"
 keywords:
   - publications

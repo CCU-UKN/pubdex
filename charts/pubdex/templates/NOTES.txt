@@ -6,20 +6,33 @@ PubDex {{ .Chart.AppVersion }} (chart {{ .Chart.Version }}) is installed as rele
 It uses database {{ .Values.database.name }} on the PostgreSQL server {{ include "pubdex.databaseHost" . }}:{{ include "pubdex.databasePort" . }}, with sslmode {{ .Values.externalDatabase.sslmode }}.
 {{- if .Values.externalDatabase.setup.enabled }}
 The setup Job {{ include "pubdex.setupName" . }} prepared it as {{ .Values.externalDatabase.setup.adminUser }} before this
-release's other objects were created; it runs again before every helm upgrade
-and sets the passwords of app_readonly and app_writer from Secret {{ .Values.secrets.name }}.
-Delete the admin Secret until the next install or upgrade needs it:
+release's other objects were created, and the schema upgrade Job
+{{ include "pubdex.schemaUpgradeJobName" . }} then applied the schema changes of the application image
+that it did not have yet. Both run again before every helm upgrade that does
+not switch the setup off: the setup sets the passwords of app_readonly and
+app_writer from Secret {{ .Values.secrets.name }}, and the schema upgrade applies what is
+outstanding. Delete the admin Secret until the next install or upgrade needs it:
 
   kubectl --namespace {{ $ns }} delete secret {{ .Values.externalDatabase.setup.adminSecret.name }}
 {{- else }}
 The chart did not prepare the database (externalDatabase.setup.enabled=false).
-Run charts/pubdex/files/external-setup.sh against it before the read service
+Run files/external-setup.sh of this chart against it before the read service
 can become ready, and again after each change of the passwords in Secret
-{{ .Values.secrets.name }} (KUBERNETES.md, Installing without the setup Job).
+{{ .Values.secrets.name }}; run the schema upgrade of the application image, python -m
+people_pubs.schema upgrade, as the same role before the first install and
+before each upgrade to new images (KUBERNETES.md, Installing without the
+setup Job).
 {{- end }}
+{{- else }}
+
+The schema upgrade Job {{ include "pubdex.schemaUpgradeJobName" . }} brings the database to the schema
+of the application image, as postgres, at this install or upgrade; its log
+says what it did:
+
+  kubectl --namespace {{ $ns }} logs job/{{ include "pubdex.schemaUpgradeJobName" . }}
 {{- end }}
 
-Wait until the {{ if eq .Values.mode "evaluation" }}database and the {{ end }}read service are ready:
+Wait until the {{ if eq .Values.mode "evaluation" }}database and the read service are{{ else }}read service is{{ end }} ready:
 {{ if eq .Values.mode "evaluation" }}
   kubectl --namespace {{ $ns }} rollout status statefulset/{{ include "pubdex.postgresqlName" . }} --timeout=5m
 {{- end }}
@@ -69,7 +82,7 @@ No TLS is configured (ingress.tls): these hosts are served by plain HTTP.
 {{- if and .Values.networkPolicy.enabled (not .Values.networkPolicy.api.allowFrom) }}
 networkPolicy.api.allowFrom is empty, so NetworkPolicy {{ $api }} does not admit
 the ingress controller's pods: add their namespace there
-(charts/pubdex/examples/values-ingress-tls.yaml).
+(examples/values-ingress-tls.yaml of this chart).
 {{- end }}
 {{- end }}
 {{- if .Values.demo.enabled }}

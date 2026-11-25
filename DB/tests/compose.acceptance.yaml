@@ -25,6 +25,8 @@ services:
     labels: *run-label
   postgres:
     labels: *run-label
+  schema-upgrade:
+    labels: *run-label
   api:
     labels: *run-label
     networks:

@@ -39,7 +39,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from people_pubs.api.database import PUBLICATION_FIELDS, ReadUnavailable
+from people_pubs.api.database import PUBLICATION_FIELDS, ReadUnavailable, SchemaUnavailable
 
 DEFAULT_LIMIT = 25
 MAX_LIMIT = 100
@@ -157,7 +157,10 @@ def create_app(source: ReadSource) -> Starlette:
         try:
             source.check()
         except ReadUnavailable as exc:
-            return respond(503, {"status": "not_ready", "reason": exc.reason})
+            payload = {"status": "not_ready", "reason": exc.reason}
+            if isinstance(exc, SchemaUnavailable):
+                payload["message"] = str(exc)
+            return respond(503, payload)
         return respond(200, {"status": "ready"})
 
     def publications(request: Request) -> JSONResponse:
@@ -169,7 +172,8 @@ def create_app(source: ReadSource) -> Starlette:
             # One row more than the page holds tells whether another page exists.
             rows = source.list_publications(after=after, limit=limit + 1)
         except ReadUnavailable as exc:
-            return error_response(503, exc.reason, UNAVAILABLE_MESSAGES[exc.reason])
+            message = str(exc) if isinstance(exc, SchemaUnavailable) else UNAVAILABLE_MESSAGES[exc.reason]
+            return error_response(503, exc.reason, message)
         items = [{field: row[field] for field in PUBLICATION_FIELDS} for row in rows[:limit]]
         next_after = items[-1]["pub_id"] if len(rows) > limit else None
         return respond(200, {"items": items, "limit": limit, "next_after": next_after})

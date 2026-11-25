@@ -9,6 +9,7 @@ service as the service's own settings place it.
 from __future__ import annotations
 
 import http.server
+import json
 import os
 import signal
 import socketserver
@@ -97,6 +98,14 @@ def test_anything_else_fails_and_says_why(stand_in, monkeypatch, capsys, status:
     path, handler = stand_in
     handler.answers["/readyz"] = (status, body)
     assert _probe(monkeypatch, capsys, path) == (1, "", message)
+
+
+@pytest.mark.parametrize("reason", ["schema_upgrade_required", "schema_not_supported"])
+def test_schema_refusal_includes_the_upgrade_command(stand_in, monkeypatch, capsys, reason) -> None:
+    path, handler = stand_in
+    message = "database schema version unrecorded; this application supports 0001. Run python -m people_pubs.schema upgrade."
+    handler.answers["/readyz"] = (503, json.dumps({"status": "not_ready", "reason": reason, "message": message}).encode())
+    assert _probe(monkeypatch, capsys, path) == (1, "", f"not ready: HTTP 503 ({reason}): {message}")
 
 
 def test_no_service_fails_without_a_traceback(tmp_path: Path, monkeypatch, capsys) -> None:

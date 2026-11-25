@@ -128,6 +128,7 @@ case "$1" in
 {"name": "$name", "services": {
  "bootstrap": {"image": "$image", "network_mode": "none"},
  "postgres": {"image": "$postgres_image", "environment": {"X": "$leak"}},
+ "schema-upgrade": {"image": "$image"},
  "api": {"image": "$image", "ports": [{"host_ip": "127.0.0.1", "published": "$port", "target": 8000}],
          "environment": {"PEOPLE_PUBS_API_LOG_LEVEL": "WARNING"}}},
  "secrets": {$files},
@@ -204,6 +205,12 @@ class Fake:
                          "DB/lib/compose_acceptance.sh", "DB/lib/release_identity.sh", *DEPLOYMENT_FILES]:
             (self.root / relative).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(ROOT / relative, self.root / relative)
+        # Keep the synthetic image labels and this scratch deployment on
+        # the same fixed version as the reference cases below.
+        (self.root / "VERSION").write_text("0.1.0\n", encoding="utf-8")
+        compose = self.root / "compose.yaml"
+        compose.write_text(compose.read_text(encoding="utf-8").replace(
+            (ROOT / "VERSION").read_text(encoding="utf-8").strip(), "0.1.0"), encoding="utf-8")
         self.state = tmp_path / "state"
         (self.state / "images").mkdir(parents=True)
         self.events = tmp_path / "events.log"
@@ -410,7 +417,7 @@ def test_the_env_file_of_a_copy_of_the_deployment_configures_every_compose_call(
     assert sorted(str(path.relative_to(seen)) for path in seen.rglob("*") if path.is_file()) == sorted(
         [*DEPLOYMENT_FILES, ".env"]), "the operator's directory: the deployment files and the .env file, nothing else"
     for relative in DEPLOYMENT_FILES:
-        assert (seen / relative).read_bytes() == (ROOT / relative).read_bytes(), relative
+        assert (seen / relative).read_bytes() == (fake.root / relative).read_bytes(), relative
         assert (seen / relative).stat().st_mode == (ROOT / relative).stat().st_mode, relative
     secrets = fake.state / "secrets-seen"
     assert sorted(path.name for path in secrets.iterdir()) == [
@@ -563,6 +570,24 @@ def test_the_documented_backup_and_restore_is_what_the_run_types() -> None:
         assert f"dc {command}" in step, f"step 8 does not run the documented docker compose {command}"
     assert "( umask 077 && bounded 300 dc exec -T postgres pg_dump" in step, "the dump is written under umask 077"
     assert '< "$DUMP"' in step, "pg_restore reads the dump on its standard input"
+
+
+def test_the_restore_ends_with_a_schema_upgrade_that_finds_the_dumps_record_and_nothing_to_do() -> None:
+    step = SCRIPT.read_text(encoding="utf-8").split("# --- 8. backup and restore", 1)[1].split("# --- 9.", 1)[0]
+    after_start = step.split("wait_healthy up-restored.log", 1)[1]
+    assert "dc logs --no-color schema-upgrade" in after_start
+    assert "schema: nothing to do: the database has every schema change of PubDex" in after_start
+    assert '! grep -qF "schema: applying"' in after_start
+    assert '[ "$(schema_record 2>/dev/null)" = "$RECORD" ]' in after_start, "the record is the dumped one"
+
+
+def test_the_login_check_starts_no_schema_upgrade() -> None:
+    # docker compose run starts a service's dependencies first, the schema
+    # upgrade included, which logs in with the superuser's file; the check of
+    # step 7 runs while that file and the database disagree.
+    script = SCRIPT.read_text(encoding="utf-8")
+    [runner] = [line for line in script.splitlines() if '"$LOGIN_CHECK"' in line]
+    assert "dc run --rm --no-deps -T ingest" in runner
 
 
 def test_the_operator_acceptance_files_are_in_this_repository() -> None:

@@ -1,53 +1,107 @@
 #!/usr/bin/env bash
-# Migration smoke test: bootstrap from empty, then re-apply the patch.
+# Schema smoke test: the baseline from an empty database, the schema upgrade,
+# then a second schema upgrade with nothing left to do, then re-application of
+# the runtime patch.
 #
-# Proves that DB/init/ bootstraps the full schema from an EMPTY PostgreSQL
-# database, and that the runtime patch (010_ingestion_runtime_schema.sql) is
-# idempotent: re-applying it to the freshly bootstrapped database must succeed
-# without errors and leave every expected object in place, the login roles'
-# use of the schema holding the extensions included. A last re-application
-# runs after the maintenance role has been removed from this run's own
-# cluster, as in a database restored elsewhere: it must succeed as well, and
-# must not create the role.
+# Proves that DB/init/ bootstraps the baseline, the full schema of PubDex
+# 0.1.0, from an EMPTY PostgreSQL database, without the record of schema
+# changes; that the schema upgrade (python -m people_pubs.schema upgrade, run
+# as the deployments run it: as the superuser that applied the baseline, with
+# the password from the file PEOPLE_DB_PASSWORD_FILE names) then applies every
+# schema change of DB/schema/, records each in pubdex.schema_changes, leaves
+# app_readonly reading and app_writer writing every table of app, biblio and
+# activity and using every sequence there, and lets both read the record and
+# nothing else of it; and that a second schema upgrade finds nothing to do and
+# changes nothing, as status confirms. It also proves that the runtime patch
+# (010_ingestion_runtime_schema.sql) is idempotent: re-applying it to the
+# database must succeed without errors, leave every expected object in place,
+# the login roles' use of the schema holding the extensions included, and
+# leave the record as it was. A last re-application runs after the
+# maintenance role has been removed from this run's own cluster, as in a
+# database restored elsewhere: it must succeed as well, and must not create
+# the role.
 #
-# Runs entirely inside a disposable Docker container with its own data volume.
-# Both carry a unique per-run name and a run label, and no host port is
-# published. The cleanup is registered before anything is created and runs on
-# every ordinary exit and after SIGINT, SIGTERM or SIGHUP -- also after a
-# failed start -- ignoring further signals meanwhile. It removes only what
-# carries this run's label and then confirms that nothing is left. SIGKILL
-# skips the cleanup; a failed removal or a daemon that stops answering can
-# leave something behind as well, but then the run says so, prints the
-# commands that find the leftovers, and fails. Existing containers and volumes
-# are never touched: a name collision aborts instead of taking the resource
-# over, and parallel runs do not interfere. The superuser password is random,
+# Runs against a disposable Docker container with its own data volume. Both
+# carry a unique per-run name and a run label, and PostgreSQL is published
+# only on a loopback port Docker picks, which the schema upgrade, run from
+# .venv on the host, connects to. The cleanup is registered before anything is
+# created and runs on every ordinary exit and after SIGINT, SIGTERM or SIGHUP
+# -- also after a failed start -- ignoring further signals meanwhile. It
+# removes only what carries this run's label, and the run's private temporary
+# directory, and then confirms that nothing is left. SIGKILL skips the
+# cleanup; a failed removal or a daemon that stops answering can leave
+# something behind as well, but then the run says so, prints the commands that
+# find the leftovers, and fails. Existing containers and volumes are never
+# touched: a name collision aborts instead of taking the resource over, and
+# parallel runs do not interfere. The superuser password is random,
 # independent of the printed run id, and reaches Docker through the
-# environment rather than a command line; the container log tail printed after
-# a failed bootstrap has it masked. This lifecycle is shared with the other
-# Docker-backed scripts through lib/disposable_postgres.sh.
+# environment rather than a command line, and the schema upgrade through a
+# pipe from the shell; it is on no command line and in no file, and the
+# container log tail printed after a failed bootstrap has it masked. This
+# lifecycle is shared with the other Docker-backed scripts through
+# lib/disposable_postgres.sh.
 #
-#   ./run_migration_smoke.sh                 # full run (needs Docker)
+#   ./run_migration_smoke.sh                 # full run (needs Docker and .venv)
 #   SMOKE_PG_IMAGE=postgres:16@sha256:<digest> ./run_migration_smoke.sh
 #   (DISPOSABLE_PG_IMAGE sets the image of all three Docker-backed scripts at once)
 set -euo pipefail
 cd "$(dirname "$0")"
 
 DB_DIR="$PWD"
+PYTHON="$DB_DIR/../.venv/bin/python"
+if [ ! -x "$PYTHON" ]; then
+  echo "ERROR: no interpreter at .venv/bin/python" >&2
+  echo "Create it from the repository root with:" >&2
+  echo "  ./setup_venv.sh" >&2
+  exit 1
+fi
 IMAGE="${SMOKE_PG_IMAGE:-${DISPOSABLE_PG_IMAGE:-postgres:16}}"
 WAIT_SECONDS="${SMOKE_WAIT_SECONDS:-120}"
 LABEL_KEY="pubdex.migration-smoke.run"
 RESOURCE_PREFIX="pubdex-migration-smoke-"
 PASSWORD_PREFIX="smoke"
+# The schema changes the schema upgrade has to apply, in order.
+SCHEMA_CHANGES=()
+for change in "$DB_DIR"/schema/*.sql; do
+  if [ -e "$change" ]; then
+    SCHEMA_CHANGES+=("$(basename "$change" .sql)")
+  fi
+done
+if [ "${#SCHEMA_CHANGES[@]}" -eq 0 ]; then
+  echo "ERROR: DB/schema/ holds no schema change." >&2
+  exit 1
+fi
+RELEASE="$(tr -d '[:space:]' < "$DB_DIR/../VERSION")"
 # shellcheck source=lib/disposable_postgres.sh
 source "$DB_DIR/lib/disposable_postgres.sh"
 pg_begin_run
+pg_make_workdir
 
-echo "[1/4] Starting disposable PostgreSQL ($IMAGE) with DB/init/ mounted (run $RUN_ID)..."
-pg_start
+echo "[1/7] Starting disposable PostgreSQL ($IMAGE) with DB/init/ mounted (run $RUN_ID)..."
+pg_start loopback
 
-echo "[2/4] Waiting for bootstrap (${PG_INIT_SCRIPTS[*]}) to finish, up to ${WAIT_SECONDS}s..."
+echo "[2/7] Waiting for bootstrap (${PG_INIT_SCRIPTS[*]}) to finish, up to ${WAIT_SECONDS}s..."
 pg_wait_for_bootstrap
 pg_report_server
+pg_loopback_port
+
+# The schema upgrade, in a subshell whose environment holds only what it
+# needs, every connection setting naming the disposable database. The
+# password reaches it as the deployments hand it over, in the file
+# PEOPLE_DB_PASSWORD_FILE names: here a pipe, which printf, a shell builtin,
+# fills, so it appears on no command line and in no file.
+schema_runner() (
+  home="${HOME:-$WORKDIR}"
+  path="$PATH"
+  lang="${LANG:-C.UTF-8}"
+  clear_exports
+  export HOME="$home" PATH="$path" LANG="$lang" \
+    PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$DB_DIR" PEOPLE_PUBS_SKIP_DOTENV=1 \
+    PGHOST=127.0.0.1 PGHOSTADDR=127.0.0.1 PGPORT="$PORT" PGUSER=postgres PGDATABASE=people_db \
+    PGSSLMODE=disable PGSERVICEFILE=/dev/null PGSYSCONFDIR="$WORKDIR" PGPASSFILE=/dev/null \
+    PEOPLE_DB_PASSWORD_FILE=/dev/fd/3
+  exec "$PYTHON" -m people_pubs.schema "$@" 3< <(printf '%s\n' "$PGPASS")
+)
 
 check_objects() {
   docker exec -i "$CONTAINER" psql -v ON_ERROR_STOP=1 -q -U postgres -d people_db <<'SQL'
@@ -410,26 +464,132 @@ reapply_runtime_patch() {
     -f /docker-entrypoint-initdb.d/010_ingestion_runtime_schema.sql >/dev/null
 }
 
-echo "[3/5] Verifying expected schema objects after fresh bootstrap..."
+# The baseline has had no schema change: DB/init/ creates no record.
+check_baseline_without_record() {
+  docker exec -i "$CONTAINER" psql -v ON_ERROR_STOP=1 -q -U postgres -d people_db <<'SQL'
+DO $$
+BEGIN
+  IF to_regnamespace('pubdex') IS NOT NULL THEN
+    RAISE EXCEPTION 'schema smoke failed: the baseline already holds the schema pubdex';
+  END IF;
+END $$;
+SQL
+}
+
+# The record holds exactly the schema changes of DB/schema/, numbered from 1,
+# applied by this checkout's release; the application roles read it and
+# nothing else of the schema pubdex, maintenance and PUBLIC nothing of it;
+# app_readonly reads every table of app, biblio and activity, app_writer
+# writes each of them and uses each sequence there.
+check_schema_upgrade() {
+  local changes
+  changes="$(IFS=,; echo "${SCHEMA_CHANGES[*]}")"
+  docker exec -i "$CONTAINER" psql -v ON_ERROR_STOP=1 -q -U postgres -d people_db \
+    -v changes="$changes" -v release="$RELEASE" <<'SQL'
+SELECT set_config('smoke.changes', :'changes', false), set_config('smoke.release', :'release', false) \g /dev/null
+DO $$
+DECLARE
+  recorded text[];
+  missing text;
+BEGIN
+  SELECT array_agg(name ORDER BY number) INTO recorded FROM pubdex.schema_changes;
+  IF recorded IS DISTINCT FROM string_to_array(current_setting('smoke.changes'), ',') THEN
+    RAISE EXCEPTION 'schema smoke failed: the record holds %, not the schema changes of DB/schema/ (%)',
+      recorded, current_setting('smoke.changes');
+  END IF;
+  IF EXISTS (SELECT FROM pubdex.schema_changes WHERE number <> left(name, 4)::integer
+             OR release <> current_setting('smoke.release') OR applied_by <> 'postgres') THEN
+    RAISE EXCEPTION 'schema smoke failed: a recorded change has another number, release or role';
+  END IF;
+  IF NOT (has_schema_privilege('app_readonly', 'pubdex', 'USAGE')
+          AND has_schema_privilege('app_writer', 'pubdex', 'USAGE')
+          AND has_table_privilege('app_readonly', 'pubdex.schema_changes', 'SELECT')
+          AND has_table_privilege('app_writer', 'pubdex.schema_changes', 'SELECT')) THEN
+    RAISE EXCEPTION 'schema smoke failed: the application roles cannot read the record';
+  END IF;
+  -- A list of privileges asks whether any of them is held.
+  IF has_table_privilege('app_readonly', 'pubdex.schema_changes', 'INSERT, UPDATE, DELETE, TRUNCATE')
+     OR has_table_privilege('app_writer', 'pubdex.schema_changes', 'INSERT, UPDATE, DELETE, TRUNCATE')
+     OR has_schema_privilege('app_readonly', 'pubdex', 'CREATE')
+     OR has_schema_privilege('app_writer', 'pubdex', 'CREATE')
+     OR has_schema_privilege('maintenance', 'pubdex', 'USAGE')
+     OR EXISTS (SELECT FROM pg_namespace n, aclexplode(n.nspacl) a
+                WHERE n.nspname = 'pubdex' AND a.grantee = 0) THEN
+    RAISE EXCEPTION 'schema smoke failed: a role may do more with the record than read it';
+  END IF;
+  SELECT string_agg(format('%I.%I', n.nspname, c.relname), ', ') INTO missing
+  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname IN ('app', 'biblio', 'activity')
+    AND CASE WHEN c.relkind = 'S' THEN NOT has_sequence_privilege('app_writer', c.oid, 'USAGE')
+             WHEN c.relkind IN ('r', 'p') THEN NOT (
+               has_table_privilege('app_readonly', c.oid, 'SELECT')
+               AND has_table_privilege('app_writer', c.oid, 'SELECT')
+               AND has_table_privilege('app_writer', c.oid, 'INSERT')
+               AND has_table_privilege('app_writer', c.oid, 'UPDATE')
+               AND has_table_privilege('app_writer', c.oid, 'DELETE'))
+             ELSE false END;
+  IF missing IS NOT NULL THEN
+    RAISE EXCEPTION 'schema smoke failed: the application roles lack their privileges on %', missing;
+  END IF;
+END $$;
+SQL
+}
+
+# The record, row by row, to compare before and after a step that must not
+# change it.
+record_snapshot() {
+  docker exec "$CONTAINER" psql -v ON_ERROR_STOP=1 -q -At -U postgres -d people_db -c \
+    "SELECT number, name, sha256, backward_compatible, release, applied_at, applied_by
+     FROM pubdex.schema_changes ORDER BY number"
+}
+
+check_record_unchanged() {  # check_record_unchanged <snapshot> <step>
+  local now
+  now="$(record_snapshot)"
+  if [ "$now" != "$1" ]; then
+    echo "ERROR: schema smoke failed: $2 changed the record of schema changes." >&2
+    exit 1
+  fi
+}
+
+echo "[3/7] Verifying expected schema objects after fresh bootstrap..."
 check_objects
 check_member_oa_view
 check_role_grants present
-echo "      OK"
+check_baseline_without_record
+echo "      OK — the baseline, without a record of schema changes"
+
+echo "[4/7] Applying the schema upgrade (python -m people_pubs.schema upgrade)..."
+schema_runner upgrade
+check_schema_upgrade
+check_objects
+check_role_grants present
+echo "      OK — ${#SCHEMA_CHANGES[@]} schema change(s) applied and recorded: ${SCHEMA_CHANGES[*]}"
+
+echo "[5/7] Applying the schema upgrade again: nothing is left to do..."
+record="$(record_snapshot)"
+schema_runner upgrade
+schema_runner status
+check_record_unchanged "$record" "the second schema upgrade"
+check_schema_upgrade
+echo "      OK — the second schema upgrade changed nothing"
 
 seed_legacy_internal_flags
 
-echo "[4/5] Re-applying 010_ingestion_runtime_schema.sql (idempotency)..."
+echo "[6/7] Re-applying 010_ingestion_runtime_schema.sql (idempotency)..."
 reapply_runtime_patch
 check_objects
 check_member_oa_view
 check_internal_flag_repair
 check_role_grants present
+check_record_unchanged "$record" "re-applying the runtime patch"
+check_schema_upgrade
 echo "      OK — patch re-applied cleanly, all objects still present"
 
 # A database restored into another cluster can lack the maintenance role,
 # which only 000_init.sql creates; the runtime patch has to apply there too,
 # and must not create the role.
-echo "[5/5] Re-applying it once more after removing the maintenance role from this run's cluster..."
+echo "[7/7] Re-applying it once more after removing the maintenance role from this run's cluster..."
 docker exec -i "$CONTAINER" psql -v ON_ERROR_STOP=1 -q -U postgres -d people_db <<'SQL'
 DROP OWNED BY maintenance;
 DROP ROLE maintenance;
@@ -438,6 +598,8 @@ reapply_runtime_patch
 check_objects
 check_member_oa_view
 check_role_grants absent
+check_record_unchanged "$record" "re-applying the runtime patch without the maintenance role"
 echo "      OK — patch re-applied without the role, and did not create it"
 
+echo "PASS: the schema upgrade applied every schema change of DB/schema/ once, and a second run had nothing to do."
 echo "PASS: schema bootstraps from empty DB and the runtime patch is re-runnable."

@@ -8,7 +8,9 @@
 # those are available -- not on an arbitrary machine with no cache.
 #
 # Shows, from a fresh clone, that PubDex can:
-#   1. bootstrap the schema from DB/init/ into an empty PostgreSQL database;
+#   1. bootstrap the schema from DB/init/ into an empty PostgreSQL database and
+#      bring it to the schema of this checkout with the schema upgrade
+#      (python -m people_pubs.schema upgrade);
 #   2. import the bundled synthetic roster;
 #   3. ingest the bundled ORCID payload through the production ingestion path;
 #   4. enrich the same publication with the bundled Crossref payload;
@@ -71,7 +73,7 @@ psql_demo() {
 echo "[1/8] Starting disposable PostgreSQL ($IMAGE) with DB/init/ mounted (run $RUN_ID)..."
 pg_start loopback
 
-echo "[2/8] Waiting for the schema to bootstrap, up to ${WAIT_SECONDS}s..."
+echo "[2/8] Waiting for the schema to bootstrap, up to ${WAIT_SECONDS}s, then applying the schema upgrade..."
 pg_wait_for_bootstrap
 pg_report_server
 pg_loopback_port
@@ -97,6 +99,10 @@ demo_python() (
     PGSERVICEFILE=/dev/null PGSYSCONFDIR="$WORKDIR" PGPASSFILE=/dev/null
   exec "$PYTHON" "$@"
 )
+
+# The schema upgrade brings the baseline to the schema of this checkout, as
+# every deployment does before the application uses the database.
+demo_python -m people_pubs.schema upgrade
 
 echo "[3/8] Importing the bundled synthetic roster..."
 demo_python -m people_pubs.sync.add_people \
@@ -247,4 +253,4 @@ cat "$WORKDIR/publications.csv"
 echo "--- end of export ---"
 echo
 echo "PASS: clean-clone acceptance run completed with no metadata-provider request."
-echo "      bootstrap -> roster -> ORCID fixture -> Crossref fixture -> queries -> export"
+echo "      bootstrap -> schema upgrade -> roster -> ORCID fixture -> Crossref fixture -> queries -> export"

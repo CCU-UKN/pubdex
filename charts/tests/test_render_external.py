@@ -1,7 +1,8 @@
 """External mode: no database server of the chart's own, the setup Job that
 prepares the operator's database, the admin credential confined to that
-Job, the CA certificate only where a connection checks it, and the lines of
-DB/init/000_init.sql the setup leaves out.
+Job and to the schema upgrade's after it, the CA certificate only where a
+connection checks it, and the lines of DB/init/000_init.sql the setup
+leaves out.
 
 Every test here but those of sslmode takes every case and branches on its
 mode, so evaluation mode shows the opposite: no setup Job, no admin Secret,
@@ -63,11 +64,15 @@ def test_the_setup_job_is_a_hook_that_prepares_the_database_first(helm, case: st
     values = case_values(case)
     rendered = helm.template("--values", CASES[case])
     setup = [obj for obj in rendered.objects if obj["metadata"]["name"] == f"{RELEASE}-setup"]
-    # The only other hooks are the demonstration's Job, after the install
-    # (test_render_ingestion), and helm test's pod (test_render_network).
-    other_hooks = [obj for obj in rendered.objects if is_hook(obj) and obj not in setup]
+    # The only other hooks are the schema upgrade's, after the setup
+    # (test_render_schema_upgrade), the demonstration's Job, after the
+    # install (test_render_ingestion), and helm test's pod
+    # (test_render_network).
+    schema = [obj for obj in rendered.objects if is_hook(obj) and obj["metadata"]["name"] == f"{RELEASE}-schema-upgrade"]
+    other_hooks = [obj for obj in rendered.objects if is_hook(obj) and obj not in setup and obj not in schema]
     assert sorted((obj["kind"], obj["metadata"]["name"]) for obj in other_hooks) == sorted(
         ([("Job", f"{RELEASE}-demo")] if values["demo"]["enabled"] else []) + [("Pod", f"{RELEASE}-test")])
+    assert bool(schema) is setup_enabled(values), "the schema upgrade's hooks run exactly when the setup runs"
     if not setup_enabled(values):
         assert setup == [], "no setup Job, script or account without externalDatabase.setup.enabled"
         return
@@ -80,8 +85,10 @@ def test_the_setup_job_is_a_hook_that_prepares_the_database_first(helm, case: st
         weights[obj["kind"]] = int(annotations["helm.sh/hook-weight"])
     # The script and the account exist before the Job starts.
     assert weights["ConfigMap"] < weights["Job"] and weights["ServiceAccount"] < weights["Job"]
-    assert [obj for obj in rendered.objects if is_hook(obj) and obj not in other_hooks] == setup, \
-        "the setup is the only hook before the install"
+    before = sorted((obj["kind"], obj["metadata"]["name"]) for obj in rendered.objects
+                    if is_hook(obj) and obj not in other_hooks)
+    assert before == sorted((obj["kind"], obj["metadata"]["name"]) for obj in setup + schema), \
+        "the setup and the schema upgrade after it are the only hooks before the install"
     job = rendered.one("Job", f"{RELEASE}-setup")
     assert job["spec"]["backoffLimit"] == 0
     assert 0 < job["spec"]["activeDeadlineSeconds"] <= 3600
@@ -133,10 +140,13 @@ def test_no_admin_credential_reaches_a_pod_that_keeps_running(helm, case: str) -
                 assert pod.owner["kind"] == "Job" and is_hook(pod.owner), f"{pod.where} mounts the admin Secret"
                 users = [c["name"] for c in containers(pod)
                          if any(m["name"] == volume["name"] for m in c.get("volumeMounts") or [])]
-                assert users == ["setup"], f"{pod.where}: only the setup container reads it"
+                assert users == [pod.component] and pod.component in ("setup", "schema-upgrade"), \
+                    f"{pod.where}: only the setup's and the schema upgrade's container read it"
         for container in containers(pod):
             assert not env_value(container, "PEOPLE_PUBS_SETUP_ADMIN_PASSWORD_FILE") or pod.component == "setup"
-    assert len(holders) == (1 if setup_enabled(values) else 0)
+            password_file = (env_value(container, "PEOPLE_DB_PASSWORD_FILE") or {}).get("value", "")
+            assert not password_file.startswith("/run/secrets/pubdex-admin/") or pod.component == "schema-upgrade"
+    assert sorted(pod.component for pod in holders) == (["schema-upgrade", "setup"] if setup_enabled(values) else [])
 
 
 @pytest.mark.parametrize("case", CASES)

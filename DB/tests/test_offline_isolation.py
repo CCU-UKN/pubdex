@@ -7,7 +7,8 @@ run_checks.sh and run_ci_suite.sh from a scratch copy of the checkout in which
 .venv/bin/python is a recorder: every call records its arguments, working
 directory and environment, and succeeds. Started from an environment full of
 database settings, test DSNs, pytest options and an attempt to switch the
-DB/.env opt-out off, the pytest call sees none of them. Stages 2-9 of the
+DB/.env opt-out off, the pytest call sees none of them. run_checks.sh checks
+the release notes and the version guard before the tests. Stages 2-11 of the
 complete suite, Docker, Git and the pinned helm, kubectl and kind are stubs
 here.
 """
@@ -67,15 +68,15 @@ def _executable(path: Path, text: str) -> None:
 
 
 def checkout(tmp_path: Path) -> Path:
-    """The real entry points, a recording interpreter, and stub stages 2-9."""
+    """The real entry points, a recording interpreter, and stub stages 2-11."""
     root = tmp_path / "checkout"
     for relative in ("run_checks.sh", "run_ci_suite.sh", "DB/run_tests.sh", "DB/lib/docker_versions.sh",
-                     "DB/lib/cluster_tools.sh"):
+                     "DB/lib/cluster_tools.sh", "DB/lib/sbom_tool.sh"):
         (root / relative).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / relative, root / relative)
     for relative in ("DB/run_migration_smoke.sh", "DB/run_task_1a_demo.sh", "DB/run_disposable_integration.sh",
                      "run_stack_acceptance.sh", "run_operator_acceptance.sh", "run_chart_checks.sh",
-                     "run_cluster_acceptance.sh"):
+                     "run_cluster_acceptance.sh", "run_release_rehearsal.sh", "run_upgrade_acceptance.sh"):
         _executable(root / relative, "#!/bin/sh\nexit 0\n")
     # The suite looks for the pinned tools before any stage runs.
     for tool in ("helm", "kubectl", "kind"):
@@ -85,7 +86,8 @@ def checkout(tmp_path: Path) -> Path:
     bindir = root / ".venv" / "bin"
     _executable(bindir / "recorder.py", RECORDER)
     _executable(bindir / "python", f'#!/bin/sh\nexec "{sys.executable}" "{bindir / "recorder.py"}" "$@"\n')
-    # Answers the suite's version probes: an Engine and a Compose plugin it accepts.
+    # Answers the suite's version probes with an Engine and a Compose plugin it
+    # accepts, and its other probes, the SBOM tool's image among them, with success.
     _executable(tmp_path / "tools" / "docker", '#!/bin/sh\ncase "$*" in\n  version*) echo 29.9.1 ;;\n'
                 '  "compose version"*) echo 5.6.0 ;;\nesac\nexit 0\n')
     _executable(tmp_path / "tools" / "git", "#!/bin/sh\necho true\n")
@@ -139,12 +141,25 @@ def test_run_checks_keeps_its_tests_offline_and_unnarrowed(tmp_path: Path) -> No
     assert_isolated(call["env"])
 
 
+def test_run_checks_checks_the_release_notes_and_the_version_before_the_tests(tmp_path: Path) -> None:
+    root = checkout(tmp_path)
+    proc = run([BASH, str(root / "run_checks.sh")], polluted(tmp_path), tmp_path)
+    assert proc.returncode == 0, proc.stderr
+    order = [call["argv"][1] if call["argv"][0] == "-m" else call["argv"][0] for call in calls(root)]
+    assert order == ["compileall", "check_markdown_links.py", "DB/check_release_notes.py",
+                     "DB/check_version_guard.py", "pytest"]
+    (notes,) = [call for call in calls(root) if call["argv"] == ["DB/check_release_notes.py"]]
+    assert notes["env"]["PEOPLE_PUBS_SKIP_DOTENV"] == "1", "the check imports people_pubs and reads no DB/.env"
+    assert "[3/5] Checking the release notes of VERSION against the tree..." in proc.stdout
+    assert "[4/5] Version guard: a published version ships what it shipped..." in proc.stdout
+
+
 def test_stage_one_of_the_complete_suite_is_isolated(tmp_path: Path) -> None:
     root = checkout(tmp_path)
     proc = run([BASH, str(root / "run_ci_suite.sh"), "--base", "abc123", "--head", "def456"],
                polluted(tmp_path), tmp_path)
     assert proc.returncode == 0, proc.stderr
-    assert "PASS: all 9 stages" in proc.stdout
+    assert "PASS: all 11 stages" in proc.stdout
     (call,) = pytest_calls(root)
     assert call["argv"] == ["-m", "pytest"]
     assert_isolated(call["env"])

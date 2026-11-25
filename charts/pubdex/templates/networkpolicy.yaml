@@ -6,9 +6,9 @@ network plugin enforces NetworkPolicy applies them.
 
 - <release>-postgresql, evaluation mode: PostgreSQL admits TCP 5432 only
   from the pods of this release that connect to the database -- the read
-  service, the ingestion runs and the attached one-off pod, and the
-  demonstration (pubdex.databaseClients). Its bootstrap is an init
-  container of the same pod and needs no connection.
+  service, the ingestion runs and the attached one-off pod, the
+  demonstration and the schema upgrade (pubdex.databaseClients). Its
+  bootstrap is an init container of the same pod and needs no connection.
 - <release>-api: the read service admits TCP 8000 only from pods in the
   release's namespace labelled <release>-client: "true", and from the peers
   in networkPolicy.api.allowFrom, such as an ingress controller's

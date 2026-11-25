@@ -43,7 +43,7 @@ from psycopg import errors, sql
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
-from people_pubs import connection_security
+from people_pubs import connection_security, schema
 from people_pubs.api.settings import Settings, parse_dsn
 
 LOGGER = logging.getLogger(__name__)
@@ -86,6 +86,14 @@ class DatabaseUnavailable(ReadUnavailable):
 
 class ReadSurfaceUnavailable(ReadUnavailable):
     reason = "read_surface_unavailable"
+
+
+class SchemaUnavailable(ReadUnavailable):
+    """A schema refusal safe to show to the operator."""
+
+    def __init__(self, refusal: schema.Refused) -> None:
+        super().__init__(str(refusal))
+        self.reason = refusal.reason
 
 
 # Connected, but what the service reads is missing, not readable by its role,
@@ -189,6 +197,11 @@ class ReadDatabase:
     def _session(self) -> Iterator[psycopg.Connection]:
         try:
             with self._pool.connection() as conn:
+                try:
+                    schema.check_supported(conn)
+                except schema.Refused as exc:
+                    LOGGER.warning("%s: %s", exc.reason, exc)
+                    raise SchemaUnavailable(exc) from None
                 yield conn
         except Exception as exc:
             failure = unavailable_error(exc)

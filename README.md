@@ -39,7 +39,8 @@ required, which files carry it, and the command that verifies each part.
 suite as one forge-portable command that public CI runs from a clean checkout.
 [`TASK_2A.md`](TASK_2A.md) records the container image and the Compose
 deployment, and [`TASK_2B.md`](TASK_2B.md) the Helm chart and its tests on a
-disposable cluster.
+disposable cluster. [`TASK_2C.md`](TASK_2C.md) records release automation,
+the schema upgrade and upgrade and rollback tests between PubDex releases.
 
 Later funded results will be introduced in their own commits and recorded in
 [`CHANGELOG.md`](CHANGELOG.md) against the task they deliver and the way it
@@ -70,14 +71,20 @@ NLnet project number: 2026-02-585.
 | [`Dockerfile`](Dockerfile), [`build_image.sh`](build_image.sh), [`VERSION`](VERSION) | The application image — the ingestion commands and a preliminary read service with liveness, readiness and one paged list endpoint (the foundation of the versioned read API of task 3a, not that API), run by an unprivileged user, with the schema bootstrap and the Compose files — its build with version and source labels, and the release version; [`.dockerignore`](.dockerignore) limits the build context to an allowlist |
 | [`create_secrets.sh`](create_secrets.sh) | Creates the deployment's password files once and never overwrites them |
 | [`set_passwords.sh`](set_passwords.sh) | Gives the running deployment's database the passwords its files hold now, after one was changed, and checks each with a new connection |
-| [`run_checks.sh`](run_checks.sh) | The fast offline check suite: compilation, Markdown consistency and the offline unit and fixture tests, plus the transform-version guard in pre-commit and CI modes. The pre-commit hook, and the first stage of `run_ci_suite.sh` |
+| [`run_checks.sh`](run_checks.sh) | The fast offline check suite: compilation, Markdown consistency, the release-note check, the version guard and the offline unit and fixture tests, plus the transform-version guard in pre-commit and CI modes. The pre-commit hook, and the first stage of `run_ci_suite.sh` |
 | [`charts/pubdex/`](charts/pubdex/), [`KUBERNETES.md`](KUBERNETES.md) | The Helm chart, for a Kubernetes cluster: an evaluation mode with a PostgreSQL of its own, or a PostgreSQL server you run, from the same release images; the operator guide covers install, upgrade, rollback and uninstall, Secrets and settings, ingestion, ingress and TLS, and NetworkPolicy. [`charts/tests/`](charts/tests/) holds the chart's offline tests |
+| [`VERSIONING.md`](VERSIONING.md) | For operators: what a PubDex version number promises, the schema changes and the schema upgrade, which upgrades and rollbacks between PubDex releases are supported and which the suite runs, the release record, and the supported platforms with the Kubernetes window |
+| [`RELEASING.md`](RELEASING.md) | For maintainers: how a PubDex release is made, from its version and release notes through the build and verification at the tag to publication and the record commit, with the rules for a schema change; each command marked as run by the suite or only at a real PubDex release |
+| [`release.sh`](release.sh) | Builds the artifact set of a PubDex release — the source archive, the Helm chart's package, both images, an SBOM of each, the provenance record and the checksum file — and verifies it; `setup` pulls the pinned SBOM tool; a separate `publish` step, which only the maintainer runs, pushes the two images |
+| [`releases/`](releases/README.md) | The release record: for each published PubDex release its commit, tag, image digests, schema changes and checksum file, and in `FLOOR` the oldest release an upgrade may start from |
 | [`setup_cluster_tools.sh`](setup_cluster_tools.sh) | Installs the helm, kubectl and kind that [`DB/lib/cluster_tools.sh`](DB/lib/cluster_tools.sh) pins under `.tools/`, each checked against its pinned SHA-256, for the Kubernetes checks |
-| [`run_ci_suite.sh`](run_ci_suite.sh) | The complete verification suite in one command, and exactly what public CI runs: the offline suite, the check for committed secrets and local configuration, migration from an empty database, the task-1a demonstration, the integration suite on a disposable PostgreSQL, the acceptance test of the Compose deployment, the test of the operator's workflow on it, the offline checks of the Helm chart, and the chart on a disposable Kubernetes cluster |
+| [`run_ci_suite.sh`](run_ci_suite.sh) | The complete verification suite in one command, and exactly what public CI runs: the offline suite, the check for committed secrets and local configuration, migration from an empty database, the task-1a demonstration, the integration suite on a disposable PostgreSQL, the acceptance test of the Compose deployment, the test of the operator's workflow on it, the offline checks of the Helm chart, the chart on a disposable Kubernetes cluster, the rehearsal of a PubDex release, and the upgrades between PubDex releases on Compose |
 | [`run_stack_acceptance.sh`](run_stack_acceptance.sh) | The acceptance test of the Compose deployment: the image built from the checkout, or a published one, started with `compose.yaml` in a project of its own, a small ingest inside it, the result read over HTTP, readiness, persistence and secrets checked, and everything it created removed |
 | [`run_operator_acceptance.sh`](run_operator_acceptance.sh) | The operator's workflow on the Compose deployment, as `DEPLOYMENT.md` gives it: an `.env` configuration on the ordinary network, a private roster imported on standard input, ingestion of the bundled payloads, refresh, read service and export, password changes with `set_passwords.sh` for files overwritten and replaced, a backup restored into a new stack, and the documented role model, checked by the records and connections they leave |
 | [`run_chart_checks.sh`](run_chart_checks.sh) | The offline checks of the Helm chart with the pinned helm: lint, rendering of every values file and example, and the assertions on the manifests; stage 8 of `run_ci_suite.sh` |
-| [`run_cluster_acceptance.sh`](run_cluster_acceptance.sh) | The Helm chart on disposable kind clusters of its own: in both modes, install, the demonstration, reads over HTTP, `helm test`, an upgrade from the published images, rollback, password changes, readiness, NetworkPolicy and uninstall; then evaluation mode on the oldest supported Kubernetes release as a user with only the rights the guide lists; and everything it created removed; stage 9 of `run_ci_suite.sh` |
+| [`run_cluster_acceptance.sh`](run_cluster_acceptance.sh) | The Helm chart on disposable kind clusters of its own: in both modes, the install of the preceding PubDex release, the demonstration, reads over HTTP, `helm test`, the upgrade to this checkout with the schema upgrade, rollback, password changes, readiness, NetworkPolicy and uninstall, and a fresh install of this checkout's chart; in external mode, the upgrade from test release A to test release B1, built by `release.sh`, with its schema upgrade and an image rollback; then the same upgrade in evaluation mode on the oldest supported Kubernetes release as a user with only the rights the guide lists; and everything it created removed; stage 9 of `run_ci_suite.sh` |
+| [`run_release_rehearsal.sh`](run_release_rehearsal.sh) | The rehearsal of a PubDex release, publishing nothing: [`release.sh`](release.sh) builds a test release of the checkout as it is, verifies it, builds it again and compares the source archive and the chart package byte for byte, then lints and renders the chart from its package file; stage 10 of `run_ci_suite.sh` |
+| [`run_upgrade_acceptance.sh`](run_upgrade_acceptance.sh) | The upgrades between PubDex releases on the Compose deployment, with an operator's commands: test release A of the checkout to test releases B1 and B2, with an image rollback and a rollback by restore, and the published preceding release to A with an image rollback; stage 11 of `run_ci_suite.sh` |
 | [`check_secrets_and_local_config.py`](check_secrets_and_local_config.py) | The check for committed secrets and local configuration over the publishable tree; findings name rule, file and line, never the matched text |
 | [`DB/run_task_1a_demo.sh`](DB/run_task_1a_demo.sh) | The clean-clone acceptance demonstration: a disposable database, bundled ORCID and Crossref payloads, queries and a verified export, with no metadata-provider request |
 | [`DB/run_disposable_integration.sh`](DB/run_disposable_integration.sh) | The complete integration suite against a PostgreSQL started, bound and removed for that run alone |
@@ -86,6 +93,7 @@ NLnet project number: 2026-02-585.
 | [`TASK_1B.md`](TASK_1B.md) | The acceptance record for the second funded result, the forge-portable test suite |
 | [`TASK_2A.md`](TASK_2A.md) | The acceptance record for the container image and the Compose deployment |
 | [`TASK_2B.md`](TASK_2B.md) | The acceptance record for the Helm chart and its tests on a disposable cluster |
+| [`TASK_2C.md`](TASK_2C.md) | The acceptance record for release automation, the schema upgrade and upgrade and rollback tests; public CI and publication pending |
 | [`DEVELOPMENT_METHODS.md`](DEVELOPMENT_METHODS.md) | How the initial public baseline was prepared, reviewed and verified |
 | [`QUICKSTART.md`](QUICKSTART.md) | Clean clone to a running database with demo data, a query over what landed, and an export |
 | [`QUICKSTART_CURATION.md`](QUICKSTART_CURATION.md) | Curation, aliases and reporting exports on top of that state |
@@ -188,8 +196,10 @@ Prefer a dry run on first contact with any database you care about.
 Two commands, both from the repository root:
 
 - `./run_checks.sh` — the **fast offline check suite**: compilation of the
-  package and its tests, the Markdown link and path check, and the offline unit
-  and source-fixture tests; in pre-commit and CI modes (`--staged`, or
+  package and its tests, the Markdown link and path check, the check of the
+  release notes against the tree, the version guard, which refuses a tree
+  that carries a published version but ships other files, and the offline
+  unit and source-fixture tests; in pre-commit and CI modes (`--staged`, or
   `--base`/`--head`) it additionally runs the transform-version guard. It needs
   only the Python environment and a Git checkout — no database, no Docker, no
   network — and it is the pre-commit hook. Its tests run in a cleared
@@ -208,7 +218,9 @@ Two commands, both from the repository root:
   checks of the Helm chart, and the chart's acceptance test on disposable
   kind clusters of the newest and the oldest supported Kubernetes release,
   which installs, upgrades, rolls back and uninstalls it in both of its
-  modes.
+  modes, the rehearsal of a PubDex release, which builds and verifies a
+  test release of the checkout and publishes nothing, and the upgrades and
+  rollbacks between PubDex releases on the Compose deployment.
   It stops at the first failing stage;
   `--base <sha> [--head <sha>]` adds the transform-version guard over that
   commit range and checks the files its commits add or change for secrets
@@ -226,14 +238,17 @@ Two commands, both from the repository root:
 The complete suite needs a Git checkout, Python 3.11 with pip from
 `DB/requirements-pip.txt` and then `DB/requirements-dev.txt` installed into
 `.venv` (as above), the pinned helm, kubectl and kind that
-`./setup_cluster_tools.sh` installs (below), `openssl`, and a Docker Engine
+`./setup_cluster_tools.sh` installs (below), the pinned SBOM tool that
+`./release.sh setup` pulls, `openssl`, and a Docker Engine
 28.0.1 or later, except 28.2.0 to 28.3.2, with the buildx plugin and the Compose plugin 2.24.0 or later, which your user can reach
 and which can pull `postgres:16`, the images the `Dockerfile` and
 `compose.yaml` name and kind's two node images; the kind clusters' nodes pull
-the published images from `ghcr.io`. It uses only synthetic fixtures and disposable
+the published images from `ghcr.io`, as stage 11 does when Docker lacks them. It uses only synthetic fixtures and disposable
 databases: each Docker-backed stage starts its own uniquely named resources —
 stages 6 and 7 a Compose project of their own, stage 9 two kind clusters,
-one after the other, each on a Docker network of its own — publishes them on loopback at
+one after the other, each on a Docker network of its own, stage 10 the
+images of a test release, stage 11 those of three and Compose projects of
+its own — publishes them on loopback at
 most, and removes them again when the stage ends, also after a failure or an
 interrupt; their throwaway passwords never appear on a command line or in the
 output. No stage connects to an existing database, Kubernetes cluster or
@@ -254,14 +269,49 @@ in `charts/pubdex/` offline with that helm. `./run_cluster_acceptance.sh`,
 stage 9, runs the chart on two kind clusters that it creates and deletes
 again, one after the other, each with its own kubeconfig, and runs the
 commands that the appendix of [`KUBERNETES.md`](KUBERNETES.md) assigns to its
-steps; about six minutes on a workstation with Docker's build cache warm. `./run_checks.sh`
-does not need the tools.
+steps; about ten minutes on a workstation with Docker's build cache warm. `./run_checks.sh`
+does not need the tools. Stages 9 to 11 build test releases with
+[`release.sh`](release.sh), which writes an SBOM of each image with the
+pinned Syft image that `./release.sh setup` pulls once per machine, by
+digest and without credentials.
 
 ```bash
 ./setup_cluster_tools.sh         # once: the pinned helm, kubectl and kind under .tools/
+./release.sh setup               # once per machine: the pinned SBOM tool, for stages 9-11
 ./run_chart_checks.sh            # stage 8: offline, no cluster
 ./run_cluster_acceptance.sh      # stage 9: a disposable kind cluster; needs Docker
+./run_release_rehearsal.sh       # stage 10: a test release built and verified, nothing published
+./run_upgrade_acceptance.sh      # stage 11: upgrades between PubDex releases on Compose
 ```
+
+## Releases and versions
+
+PubDex is published as numbered ***PubDex releases***. One version names
+the tag `v<version>`, the application and PostgreSQL images and the Helm
+chart's package, which come with a checksum file, an SBOM of each image and
+a provenance record. Until 1.0.0, a patch release changes neither the
+schema nor ingestion, and a minor release may change either. Each PubDex
+release has a section in [`CHANGELOG.md`](CHANGELOG.md) whose first three
+headings say what changed in the schema and in ingestion and how to upgrade
+and roll back; the suite checks them against the tree. Nothing is signed.
+
+- [`VERSIONING.md`](VERSIONING.md), for operators: what a version promises,
+  schema changes and the schema upgrade, which upgrades and rollbacks
+  between PubDex releases are supported and which the suite runs, and the
+  supported platforms.
+- Upgrading a deployment: [`DEPLOYMENT.md`](DEPLOYMENT.md), [Upgrading to a
+  new release](DEPLOYMENT.md#upgrading-to-a-new-release), for Docker
+  Compose, and [`KUBERNETES.md`](KUBERNETES.md), [Upgrading to a new
+  release](KUBERNETES.md#upgrading-to-a-new-release), for the Helm chart.
+  Take a backup first.
+- The release record, [`releases/`](releases/README.md), committed with the
+  repository, is authoritative: for every published PubDex release its
+  commit, its tag and the digests of its images, by which to install it,
+  and from 0.2.0 on the checksum file that checks the files of the forge's
+  release page, a copy.
+- [`RELEASING.md`](RELEASING.md), for maintainers: how a PubDex release is
+  made and published. CI rehearses it on every run, stage 10 of the suite,
+  and never publishes.
 
 ## Licensing
 

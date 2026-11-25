@@ -86,6 +86,10 @@ def check(conn: http.client.HTTPConnection, path: str, expected: str) -> Tuple[b
         return True, expected
     reason = payload.get("reason") if isinstance(payload, dict) else None
     detail = f" ({reason})" if isinstance(reason, str) and reason else ""
+    if reason in {"schema_upgrade_required", "schema_not_supported"}:
+        message = payload.get("message")
+        if isinstance(message, str) and message:
+            detail += ": " + " ".join(message.splitlines())
     return False, f"not {expected}: HTTP {response.status}{detail}"
 
 

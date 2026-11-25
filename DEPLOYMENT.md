@@ -83,8 +83,9 @@ image](#selecting-a-published-image)). The rest of this page is the detail.
 - [The development setup: DB/compose.yaml](#the-development-setup-dbcomposeyaml)
 - [The application image](#the-application-image), with [The PostgreSQL image](#the-postgresql-image)
 - [What identifies a deployment](#what-identifies-a-deployment)
+- [Upgrading to a new release](#upgrading-to-a-new-release)
 - [Checking a deployment](#checking-a-deployment)
-- [Publishing an image](#publishing-an-image)
+- [Publishing an image](#publishing-an-image), in [`RELEASING.md`](RELEASING.md)
 - [Troubleshooting](#troubleshooting)
 
 ## What you need
@@ -162,8 +163,8 @@ supported releases, for the default address, 127.0.0.1, and the default
 firewalld and other addresses in `PEOPLE_PUBS_HTTP_ADDRESS` were not tested.
 
 `build_image.sh` builds for the platform of the Docker daemon and prints it:
-on another architecture it builds an image nobody has tested. A release is
-built for `linux/amd64` alone ([Publishing an image](#publishing-an-image));
+on another architecture it builds an image nobody has tested. A PubDex
+release is built for `linux/amd64` alone ([`RELEASING.md`](RELEASING.md));
 a two-platform image would be one reference for two images, one of them
 untested.
 
@@ -205,7 +206,10 @@ names the images of its release, `ghcr.io/ccu-ukn/pubdex:<version>` and
 `ghcr.io/ccu-ukn/pubdex-postgres:<version>`; `PEOPLE_PUBS_IMAGE=pubdex:local`
 and `PEOPLE_PUBS_POSTGRES_IMAGE=pubdex-postgres:local` in `.env` put your
 builds in their place. With published images the secret files are the only
-preparation.
+preparation. In a checkout between two PubDex releases, `compose.yaml` names
+the next version, which is not published yet: build the images and name
+them as above ([`VERSIONING.md`](VERSIONING.md), *A checkout between PubDex
+releases*).
 
 `./create_secrets.sh` creates `secrets/` (mode 700) with a random password in
 each of three files (mode 444; [Secrets](#secrets)). It never overwrites a
@@ -225,12 +229,18 @@ moved. `docker compose pull` fetches what the names point to now.
 `docker compose up --wait` runs the one-shot service `bootstrap`, which
 copies the schema files the image carries — those of
 [`DB/init/`](DB/init/) — into a volume of its own, then starts PostgreSQL,
-waits until it is healthy, starts the read service and returns once that is
-healthy, or fails naming the service that is not. On the first start, with an
+waits until it is healthy, runs the one-shot service `schema-upgrade`, which
+applies the schema changes the image carries that the database has not had
+yet, starts the read service and returns once that is healthy, or fails
+naming the service that is not. On the first start, with an
 empty volume, PostgreSQL runs the schema files, gives the two application
 roles the passwords from their files and takes the login away from
 `maintenance`. Later starts copy the files again but never run them on a
-volume with data. No SQL by hand and no roster is needed; the canonical
+volume with data. The schema upgrade runs at every start and before every
+`docker compose run` of `ingest` or `demo`; with nothing outstanding it
+changes nothing, and when it fails nothing that uses the database starts:
+`docker compose ps --all` and `docker compose logs schema-upgrade` say why.
+No SQL by hand and no roster is needed; the canonical
 publication list stays empty until you configure which publications are
 yours ([Ingestion](#ingestion)).
 
@@ -374,7 +384,7 @@ when `-f` or `COMPOSE_FILE` name the files, name the override there too.
 
 | File in `secrets/` | Password of | Read by |
 |---|---|---|
-| `postgres_password` | `postgres`, the bootstrap superuser | the PostgreSQL container only: its image reads the file at every start and uses it only when it initialises the database |
+| `postgres_password` | `postgres`, the bootstrap superuser | the PostgreSQL container, whose image reads the file at every start and uses it only when it initialises the database, and `schema-upgrade`, which logs in with it |
 | `app_readonly_password` | `app_readonly` | the PostgreSQL container's initialisation, and the read service |
 | `app_writer_password` | `app_writer` | the PostgreSQL container's initialisation, and `ingest` and `demo` |
 
@@ -439,15 +449,21 @@ runs.
 | Service | Health check | Healthy means |
 |---|---|---|
 | `postgres` | `pg_isready` on TCP, and a query of the roles | the server accepts connections, and both application roles have their passwords |
-| `api` | `python -m people_pubs.api.probe` (`/readyz`), every 30 seconds | `/readyz` answers 200 within the probe's 4 seconds: a database connection in time and the snapshot readable |
+| `api` | `python -m people_pubs.api.probe` (`/readyz`), every 30 seconds | `/readyz` answers 200 within the probe's 4 seconds: a database connection in time, a schema the application supports and the snapshot readable |
 
-The read service starts once PostgreSQL is healthy, and the database check
-includes the role passwords, so a first start that failed half-way, which a
+The read service starts once PostgreSQL is healthy and the schema upgrade
+has succeeded, and the database check includes the role passwords, so a
+first start that failed half-way, which a
 restart does not repeat, is never served. `python -m people_pubs.api.probe
 --live` checks `/livez` instead, for an orchestrator that restarts an
 unresponsive process. While PostgreSQL is down, `/readyz` answers 503
 `database_unavailable` within 5 seconds and `/livez` 200; the read service
-recovers by itself once PostgreSQL is back.
+recovers by itself once PostgreSQL is back. On a schema it does not support,
+which only a read service started without the schema upgrade meets,
+`/readyz` and `/v0/publications` answer 503 with the reason
+`schema_upgrade_required` or `schema_not_supported` and a message that names
+the schema upgrade ([`VERSIONING.md`](VERSIONING.md), *Schema changes and
+the schema upgrade*).
 
 ## Data and storage
 
@@ -477,7 +493,7 @@ docker compose stop api                    # nothing else may use the database
 docker compose exec -T postgres dropdb -U postgres --force people_db
 docker compose exec -T postgres createdb -U postgres people_db
 docker compose exec -T postgres pg_restore -U postgres -d people_db --single-transaction --exit-on-error < people_db.dump
-docker compose up --wait
+docker compose up --wait                   # its schema upgrade finds the dump's record: nothing to do
 ```
 
 - **The database has to be empty.** `dropdb` deletes it with every record,
@@ -486,8 +502,9 @@ docker compose up --wait
   holding a schema, as every first start creates, `pg_restore` fails at the
   first object that exists, and the single transaction leaves it unchanged.
 - **The same PostgreSQL major version, 16**, as `compose.yaml` pins, and **the
-  same PubDex release**, whose schema the dump holds. Anything else is an
-  upgrade, which this deployment does not support yet (task 2c). A dump of a
+  PubDex release whose schema the dump holds**: restore it with that
+  release's images, and upgrade afterwards ([Upgrading to a new
+  release](#upgrading-to-a-new-release)). A dump of a
   deployment that ran the official `postgres:16` image restores into the
   PubDex PostgreSQL image, and the other way round (tested with synthetic
   data; [The PostgreSQL image](#the-postgresql-image)).
@@ -517,6 +534,7 @@ in `DB/` serve the development setup only.
 docker compose logs -f api        # the read service
 docker compose logs postgres      # the database, with its initialisation on the first start
 docker compose logs bootstrap     # the schema files copied from the image, with their SHA-256
+docker compose logs schema-upgrade  # the schema changes applied at each start, or why none could be
 ```
 
 The read service logs one plain-text line per request to standard error,
@@ -557,7 +575,7 @@ development setup; only the logins differ:
 
 | Role | Logs in here | May |
 |---|---|---|
-| `postgres` | no service; the health check and `set_passwords.sh` use PostgreSQL's socket inside its container, where no password is needed | everything: the bootstrap superuser |
+| `postgres` | `schema-upgrade`, with its password file; the health check and `set_passwords.sh` use PostgreSQL's socket inside its container, where no password is needed | everything: the bootstrap superuser |
 | `app_readonly` | the read service | read the tables and views of `app`, `biblio`, `activity` and `staging_raw`; nothing in `pii` |
 | `app_writer` | `ingest` and `demo` | read and write `app`, `biblio` and `activity`; `pii` only through its definer functions, below |
 | `maintenance` | nobody: the first start takes its login away | read and change the tables of `pii`; nothing of the application schemas |
@@ -716,8 +734,11 @@ To prepare a future update, a PostgreSQL minor release changes
 postgresql.org's `.sha256` file, compared with that of PGDG's signed source
 index — and usually the entrypoint image's digest and its scripts' hashes;
 a Debian update changes the Debian image's digest. Its libraries come from
-Debian 13's archive at build time, so a rebuild takes Debian's newest
-security updates of them; the image's package database records which.
+Debian 13's archive when the build step that installs them runs, so such a
+build takes Debian's newest security updates of them; Docker's build cache
+otherwise serves the step as an earlier build ran it, unless the build is
+made without the cache (`./build_image.sh --no-cache`, as a PubDex release's
+build is). The image's package database records which.
 
 ### Building it
 
@@ -733,8 +754,8 @@ image inspect --format '{{json .Config.Labels}}' pubdex:local`):
 
 | Label | Value |
 |---|---|
-| `org.opencontainers.image.version` | the release version, from [`VERSION`](VERSION) |
-| `org.opencontainers.image.revision` | the commit the checkout is at; `<commit>-dirty` when the working tree differs from it, `unknown` outside a Git checkout |
+| `org.opencontainers.image.version` | the release version, from [`VERSION`](VERSION); a test release's `<VERSION>-test.<name>`, given with `--version` |
+| `org.opencontainers.image.revision` | the commit the checkout is at; `<commit>-dirty` when the working tree differs from it, `unknown` outside a Git checkout, where a test release's copy states `<commit>-dirty` with `--revision` |
 | `org.opencontainers.image.created` | the time of the build |
 | `org.opencontainers.image.source` | the repository URL given with `--source`, otherwise empty |
 | `pubdex.transform-version` | `people_pubs.__version__` (application image) |
@@ -773,10 +794,18 @@ by the hash recorded at its build — so no compiler, header or build tool
 reaches it, and psycopg fails rather than falling back to another
 implementation (`PSYCOPG_IMPL=c`) ([`DB/README.md`](DB/README.md), section
 10). The base images are fixed by digest, the locked files and PostgreSQL's
-source by hash; Debian's packages come from its signed archive at build
-time: builds of one commit hold the same Python packages and PostgreSQL
-build, not the same bytes, and they take Debian's newest security updates of
-the libraries they install. The base image's own pip never runs:
+source by hash; Debian's packages come from its signed archive when the
+build step that installs them runs, and from Docker's build cache when the
+cache serves that step, which a build with `--no-cache`, as a PubDex
+release's is, never lets it do. Builds of one commit hold the same Python
+packages and PostgreSQL build, not the same bytes, and a build without the
+cache takes Debian's newest security updates of the libraries it installs.
+Each image lists the Debian packages of the
+stage that compiled its C code — psycopg-c, PostgreSQL — with their
+versions, the compiler's among them, in
+`/usr/share/doc/pubdex/build-packages.txt` and
+`/usr/share/doc/pubdex-postgres/build-packages.txt`; its own package
+database names those it runs with. The base image's own pip never runs:
 `DB/install_pip.py` checks the locked pip's wheel against its hash before
 running it. pip checks the installed packages' requirements and is then
 removed in the same build step, with the wheels from which the standard
@@ -842,19 +871,166 @@ to exist first.
 
 | Part | Pinned by |
 |---|---|
-| the application image | its digest, which the release names and which you give in `PEOPLE_PUBS_IMAGE`; the version tag in `compose.yaml` is only the default, and a tag can be moved |
-| the schema and the role setup | the image: `/opt/pubdex/init` |
+| the application image | its digest, which the [release record](releases/README.md) names and which you give in `PEOPLE_PUBS_IMAGE`; the version tag in `compose.yaml` is only the default, and a tag can be moved |
+| the schema and the role setup | the image: the baseline and the role setup in `/opt/pubdex/init`, the schema changes in `/opt/pubdex/schema`; the database's record, the table `pubdex.schema_changes`, names the schema changes it has had |
 | `compose.yaml` | the image: `/opt/pubdex/compose.yaml` is the release's copy |
-| the PostgreSQL image | its digest, which the release names and which you give in `PEOPLE_PUBS_POSTGRES_IMAGE`; its labels name the same version and commit as the application image's |
+| the PostgreSQL image | its digest, which the release record names and which you give in `PEOPLE_PUBS_POSTGRES_IMAGE`; its labels name the same version and commit as the application image's |
 
 A local build carries the files of its working tree and is labelled
 `<commit>-dirty` when the tree had changes. An image of one release with
-the `compose.yaml` of another is not a supported deployment. The schema
-bootstrap runs only on an empty volume: an installation keeps the schema of
-the image that initialised it, a dump that of its release, and upgrades
-between releases are task 2c.
+the `compose.yaml` of another is not a supported deployment, so an upgrade
+replaces all three together ([Upgrading to a new
+release](#upgrading-to-a-new-release)). The schema bootstrap runs only on an
+empty volume, and the schema upgrade of every start adds the schema changes
+of the image in use that the database has not had; a dump holds the schema
+of its release with its record of schema changes.
+
+## Upgrading to a new release
+
+An upgrade replaces the two images and the deployment files with those of
+the new PubDex release, whose application image carries them; the database
+stays in its volume, and the schema upgrade of the next start brings it to
+the new release's schema, applying the schema changes it has not had yet
+(what other tools call a migration). [`VERSIONING.md`](VERSIONING.md) says
+which upgrades are supported: from every PubDex release from the floor on,
+and a rollback only to the PubDex release you upgraded from. Read the new
+release's section in [`CHANGELOG.md`](CHANGELOG.md) first: *Upgrade and
+rollback* names the floor and says whether the way back is an image
+rollback or a restore. An upgrade to images built from a checkout between
+PubDex releases is not covered.
+
+For a deployment built from a clone as in [The short path](#the-short-path),
+there is no upgrade path for the locally built images. Take a backup, start
+a separate deployment of the published PubDex release the clone was at, as
+in [Selecting a published image](#selecting-a-published-image), restore the
+backup there with [Backup and restore](#backup-and-restore), and then
+upgrade as below. Do not extract deployment files into the clone: they
+would overwrite tracked files. Stage 7 runs the restore into the same
+PubDex release, and stage 11 runs the upgrade. If the clone was at no
+published PubDex release, the dump restores only into the PubDex release
+whose schema it holds.
+
+Run every command in the directory of the deployment's `compose.yaml`,
+whose `.env` names the images in use by digest, as in [Selecting a
+published image](#selecting-a-published-image).
+
+**1. A backup**, before every upgrade, as in [Backup and
+restore](#backup-and-restore). It is the only way back after a schema
+change that is not backward compatible. Keep the two image lines of `.env`
+as well: they are the way back after any other upgrade.
+Run the verification query now and keep its counts for the comparison
+after a restore.
+
+```bash
+docker compose exec -T postgres psql -U postgres -d people_db -XAtc 'SELECT (SELECT count(*) FROM app.people), (SELECT count(*) FROM biblio.publications), (SELECT count(*) FROM biblio.publications_canon_web)'
+(umask 077 && docker compose exec -T postgres pg_dump -U postgres -Fc people_db > people_db.dump)
+```
+
+**2. The new images, by digest.** The [release record](releases/README.md)
+names both: `images` in `releases/<version>/release.json`, and the
+PubDex release's file `DIGESTS`, the application image first. A tag can be
+moved; a digest cannot. These are the two lines of `.env` to change:
+
+```text
+PEOPLE_PUBS_IMAGE=ghcr.io/ccu-ukn/pubdex:<version>@sha256:<application image digest>
+PEOPLE_PUBS_POSTGRES_IMAGE=ghcr.io/ccu-ukn/pubdex-postgres:<version>@sha256:<PostgreSQL image digest>
+```
+
+**3. The upgrade.** Stop the stack with the `compose.yaml` it runs with,
+change the two lines, take the new release's deployment files out of its
+application image, which replace the old ones, and start:
+
+```bash
+docker compose down                        # the database stays in its volume
+#   now the two image lines of .env, as in 2
+docker run --rm ghcr.io/ccu-ukn/pubdex:<version>@sha256:<application image digest> tar -cC /opt/pubdex compose.yaml create_secrets.sh set_passwords.sh | tar -x
+docker compose up --wait                   # the schema upgrade applies the new schema changes, then the read service starts
+```
+
+Your settings stay in `.env` and the password files in `secrets/`, which
+the new files leave alone. `docker compose up --wait` returns once the
+read service is healthy, which it is only on a schema it supports.
+
+**4. The checks.** The schema upgrade's log lists each schema change it
+applied, `schema: applying <name> (backward compatible)` and then `schema:
+done: applied …`, and `docker compose ps --all` shows `schema-upgrade`
+exited with 0 and the other services healthy:
+
+```bash
+docker compose logs schema-upgrade
+docker compose ps --all
+```
+
+If the schema upgrade refuses the database or fails, `docker compose up
+--wait` fails with `service "schema-upgrade" didn't complete successfully:
+exit 1`, nothing that uses the database starts, and the log says why. The
+database is as the last schema change that succeeded left it, each change
+having run in a transaction of its own.
+
+**5. An image rollback**, after an upgrade whose schema changes are all
+backward compatible, as *Schema changes* in the release notes says: the
+same commands with the previous release's references, which you kept in 1:
+
+```bash
+docker compose down
+#   the two image lines of .env back to the previous release's references
+docker run --rm ghcr.io/ccu-ukn/pubdex:<previous version>@sha256:<its application image digest> tar -cC /opt/pubdex compose.yaml create_secrets.sh set_passwords.sh | tar -x
+docker compose up --wait
+```
+
+The schema stays as the upgrade left it, with its record. The previous
+release's schema upgrade logs `schema: the database also has 1 schema
+change of a later PubDex release, all backward compatible: <name>` and
+`schema: nothing to do`, and its read service and ingestion work on that
+schema. A PubDex release without a schema upgrade of its own, such as
+0.1.0, has no `schema-upgrade` service in its `compose.yaml`.
+
+**6. A rollback by restore**, after an upgrade that applied a schema change
+that is not backward compatible. The previous release refuses that
+database: its schema upgrade logs `schema: refused: the database has schema
+changes of a later PubDex release that are not backward compatible:
+<name>.`, so `docker compose up --wait` fails as in 4. Delete the upgraded
+database, return to the previous release's files and images, and restore
+the backup of 1 with the commands of [Backup and
+restore](#backup-and-restore):
+
+```bash
+docker compose down --volumes              # deletes the upgraded database, with everything written since the backup
+#   the two image lines of .env back to the previous release's references
+docker run --rm ghcr.io/ccu-ukn/pubdex:<previous version>@sha256:<its application image digest> tar -cC /opt/pubdex compose.yaml create_secrets.sh set_passwords.sh | tar -x
+docker compose up --wait postgres
+docker compose stop api
+docker compose exec -T postgres dropdb -U postgres --force people_db
+docker compose exec -T postgres createdb -U postgres people_db
+docker compose exec -T postgres pg_restore -U postgres -d people_db --single-transaction --exit-on-error < people_db.dump
+docker compose up --wait                   # its schema upgrade finds the dump's record: nothing to do
+```
+
+The verification query of [Backup and restore](#backup-and-restore) then
+counts what it counted at the backup.
+
+### What ran these commands
+
+[`run_upgrade_acceptance.sh`](run_upgrade_acceptance.sh), stage 11 of
+`./run_ci_suite.sh`, runs this section's commands as an operator types
+them, in Compose projects of its own, on test releases of the checkout and
+on the published preceding PubDex release; [`DB/TESTING_STRATEGY.md`](DB/TESTING_STRATEGY.md),
+*Upgrades between PubDex releases on Compose*, numbers its steps. One row
+per block of commands, in order; [`DB/tests/test_deployment_guide.py`](DB/tests/test_deployment_guide.py),
+in stage 1, checks that each `docker` command of a block is one the steps
+named run: its words, in their order, on one command line of those steps,
+which may add options of the run's own; the last column names them.
+
+| Block | Ran by | Differences and limits |
+|---|---|---|
+| `pg_dump -U postgres -Fc people_db` | stage 11, steps 1 and 6 | before the upgrade from test release A (step 1), with the verification query run first and its counts kept; step 6 ran the dump before the upgrade from the published preceding release, 0.1.0, without that query |
+| `pubdex:<version>@sha256` | stage 11, steps 1, 3 and 6 | `.env` was written whole, naming the project, both images by local tag for test releases and by digest for 0.1.0, and a port of the run's own; `up` also got `--wait-timeout`. To test release B1, with a backward-compatible schema change (step 1), to B2, with one that is not (step 3), and from 0.1.0 to A (step 6): each schema upgrade applied exactly the new schema changes and recorded them, and the read service served the publication |
+| `docker compose logs schema-upgrade` | stage 11, steps 1 to 6 | with `--no-color`, after every start; `ps --all` ran after the refusal of step 4 only, with `--format` |
+| `pubdex:<previous version>@sha256` | stage 11, steps 2 and 6 | from B1 back to A (step 2), after which A's ingestion wrote on B1's schema with A's transform version, and from A back to 0.1.0 (step 6), whose read service served on A's schema; `.env` and `--wait-timeout` as above |
+| `docker compose down --volumes` | stage 11, steps 4 and 5 | A's files and images were already in place from the image rollback that A refused in step 4, so `down --volumes` ran after them, with A's `compose.yaml`; `--wait-timeout` as above. The verification query counted what it counted before the backup |
 
 ## Checking a deployment
+
 
 ```bash
 ./run_stack_acceptance.sh                                       # builds both images from this checkout
@@ -870,12 +1046,14 @@ between releases are task 2c.
 it built or the ones you name, never replaced; without `--postgres-image` the
 PostgreSQL image is the one the started `compose.yaml` names. It checks both
 images' labels (`--expect-version`, `--expect-revision`) and digests, the
-application image's files, and that SQL/XML is unavailable in the running
+application image's files and schema changes, the schema upgrade and its
+record in the database, and that SQL/XML is unavailable in the running
 server; runs the demonstration and reads it over HTTP; stops PostgreSQL,
 recreates the containers and takes the stack down and up; and finds no
 password in any output. `--release` verifies a release: it starts the
 `compose.yaml` the image carries, which has to name the expected version for
-both images, and needs no checkout files or Git; with `--pull` both images
+both images and run the schema upgrade, and needs no checkout files or Git;
+with `--pull` both images
 are pulled by digest. [`run_operator_acceptance.sh`](run_operator_acceptance.sh),
 stage 7, carries out this page's procedures as written, configured by an
 `.env` file on the ordinary network: setting up, a roster import, an
@@ -893,91 +1071,19 @@ refused.
 
 ## Publishing an image
 
-A deliberate, manual step of a release: nothing in the repository or its CI
-pushes an image, and none is pushed for a test or before its release commit
-is published. PubDex's releases go to `ghcr.io/ccu-ukn/pubdex` and
-`ghcr.io/ccu-ukn/pubdex-postgres`: a release is both images, published
-together. Another registry with anonymous pulls can carry a copy, and a fork
-can publish its own, which then also needs a `compose.yaml` naming its
-images. Below, `<registry>/<namespace>` is `ghcr.io/ccu-ukn`, `<version>` the
-content of [`VERSION`](VERSION), `<commit>` the release commit and `<public
-repository URL>` `https://github.com/CCU-UKN/pubdex`.
-
-1. Use a clean clone at the release commit: `git status --porcelain` prints
-   nothing, `git rev-parse HEAD` prints `<commit>`.
-2. Build both images; the output has to show `revision <commit>`, not
-   `-dirty`, and `platform linux/amd64`:
-
-   ```bash
-   ./build_image.sh --tag <registry>/<namespace>/pubdex:<version> \
-     --postgres-tag <registry>/<namespace>/pubdex-postgres:<version> --source <public repository URL>
-   ```
-
-3. Verify them as a release, and the operator's workflow with them:
-
-   ```bash
-   ./run_stack_acceptance.sh --release --image <registry>/<namespace>/pubdex:<version> \
-     --postgres-image <registry>/<namespace>/pubdex-postgres:<version> \
-     --expect-version <version> --expect-revision <commit>
-   ./run_operator_acceptance.sh --image <registry>/<namespace>/pubdex:<version> \
-     --postgres-image <registry>/<namespace>/pubdex-postgres:<version>
-   ```
-
-4. Log in and check, for each of the two, whether the version is already
-   published:
-
-   ```bash
-   docker login <registry>          # asks for the credentials; never put them on a command line
-   docker buildx imagetools inspect <registry>/<namespace>/pubdex:<version>
-   docker buildx imagetools inspect <registry>/<namespace>/pubdex-postgres:<version>
-   ```
-
-   **Stop if the version exists for either.** Choose a new version; never overwrite an
-   existing version tag. Proceed only after an authenticated lookup explicitly
-   establishes that the manifest is absent. A failed command alone does not
-   establish this: an access denial, network failure or ambiguous response
-   must be resolved before publishing. Coordinate with other publishers;
-   checking absence does not reserve the tag.
-
-   After that check, confirm the local image IDs and revisions still match
-   the images verified in step 3. Only then push and record the digests, the
-   PostgreSQL image first, so that no published application image names a
-   PostgreSQL image that is missing:
-
-   ```bash
-   docker image inspect --format '{{.Id}} {{index .Config.Labels "org.opencontainers.image.revision"}}' <registry>/<namespace>/pubdex-postgres:<version>
-   docker image inspect --format '{{.Id}} {{index .Config.Labels "org.opencontainers.image.revision"}}' <registry>/<namespace>/pubdex:<version>
-   docker push <registry>/<namespace>/pubdex-postgres:<version>
-   docker push <registry>/<namespace>/pubdex:<version>
-   docker image inspect --format '{{join .RepoDigests "\n"}}' <registry>/<namespace>/pubdex-postgres:<version>
-   docker image inspect --format '{{join .RepoDigests "\n"}}' <registry>/<namespace>/pubdex:<version>
-   ```
-
-   On `ghcr.io` the login takes a classic personal access
-   token with `write:packages` at the password prompt; make both new, private
-   packages public and check their links to the repository (the `--source`
-   label) before step 5, then `docker logout ghcr.io`.
-5. Check the published image as a user receives it, on a machine without it
-   (or after `docker image rm` of its tags) and without credentials:
-
-   ```bash
-   DOCKER_CONFIG="$(mktemp -d)" ./run_stack_acceptance.sh --release --pull \
-     --image <registry>/<namespace>/pubdex:<version>@sha256:<digest> \
-     --postgres-image <registry>/<namespace>/pubdex-postgres:<version>@sha256:<postgres digest> \
-     --expect-version <version> --expect-revision <commit>
-   ```
-
-   The empty configuration also hides a Compose plugin installed under
-   `~/.docker/cli-plugins`; with one, run `docker logout <registry>` instead.
-6. Record the version, the commit, both references with their digests and
-   the platform `linux/amd64`: what an operator selects ([Selecting a published
-   image](#selecting-a-published-image)).
-
-A version tag is never moved, and the image is declared for `linux/amd64`
-only, the platform built and tested ([Supported
-platforms](#supported-platforms)). A copy by digest on another registry, or
-an equivalent build from a clone while the base image and packages remain
-available, keeps the image from depending on one host.
+The images are published as part of a PubDex release, by the publish step
+of [`release.sh`](release.sh), which only the maintainer runs:
+[`RELEASING.md`](RELEASING.md) is the procedure, from the version to the
+release record, and says which of its commands the suite runs. Nothing in
+the repository or its CI pushes an image, and no test release ever leaves
+the machine that built it. A PubDex release is both images, published
+together for `linux/amd64` alone, the platform built and tested ([Supported
+platforms](#supported-platforms)); a version tag is never moved. A fork
+publishes its own under its own registry and namespace, with a
+`compose.yaml` that names its images. A copy by digest on another registry
+with anonymous pulls, or an equivalent build from the source archive while
+the base images and packages remain available, keeps the images from
+depending on one host.
 
 ## Troubleshooting
 
@@ -1018,6 +1124,13 @@ available, keeps the image from depending on one host.
   unreadable for `app_readonly` or unpopulated; a database restored from
   elsewhere may lack the runtime patch ([`DB/README.md`](DB/README.md),
   section 3.2).
+- **`service "schema-upgrade" didn't complete successfully: exit 1`** — the
+  schema upgrade refused the database or a schema change failed; nothing
+  that uses the database was started, and `docker compose logs
+  schema-upgrade` says why. `schema: refused: the database has schema
+  changes of a later PubDex release that are not backward compatible`
+  after a return to older images: restore the backup taken before the
+  upgrade ([Upgrading to a new release](#upgrading-to-a-new-release), 6).
 - **`pg_restore: error: ... already exists`** — the database was not empty:
   drop and create it first ([Backup and restore](#backup-and-restore)).
 - **`port is already allocated`** — set `PEOPLE_PUBS_HTTP_PORT`.

@@ -1,9 +1,10 @@
 # shellcheck shell=bash
 # What identifies a release of PubDex (DEPLOYMENT.md, "What identifies a
 # deployment"); shared by build_image.sh, which labels the image it builds
-# with the release version and the revision of its checkout, and
+# with the release version and the revision of its checkout,
 # run_stack_acceptance.sh, which checks those labels and, with --release, the
-# Compose file the image carries. Sourced, not run.
+# Compose file the image carries, and release.sh, which builds, verifies and
+# publishes a PubDex release. Sourced, not run.
 #
 # A deployment is the application image and its compose.yaml. The image
 # carries the schema bootstrap (DB/init/) and the compose.yaml it was built
@@ -19,8 +20,28 @@
 # A release version, as VERSION holds it: MAJOR.MINOR.PATCH, optionally with
 # a -prerelease part.
 RELEASE_VERSION_RE='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$'
+# A test release's version, as release.sh derives it: <VERSION>-test.<name>,
+# for a VERSION without a pre-release part. Every version whose pre-release
+# part begins with "test" is reserved for test releases (is_test_version):
+# no PubDex release carries one, and none is ever published.
+TEST_VERSION_RE='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-test\.[a-z0-9]+$'
 # A commit id in full, as Git prints it: SHA-1 or SHA-256, lower case.
 COMMIT_RE='^([0-9a-f]{40}|[0-9a-f]{64})$'
+# The files of the application image's build context that Git may ignore and
+# .dockerignore still lets in -- every Python module of the package, every
+# schema change -- as pathspecs for checkout_revision: such a file makes a
+# build's revision "-dirty", because the image takes it in although no commit
+# holds it.
+IMAGE_CONTEXT_PATHSPECS=('DB/people_pubs/*.py' 'DB/schema/*.sql')
+
+# is_test_version <version>
+#
+# Succeeds for a version reserved for test releases: a release version whose
+# pre-release part begins with "test" (0.2.0-test.a, 0.2.0-testing), as
+# DB/release_record.py decides it too.
+is_test_version() {
+  [[ "$1" =~ $RELEASE_VERSION_RE ]] && [[ "$1" == *-* ]] && [[ "${1#*-}" == test* ]]
+}
 
 # checkout_commit <root>
 #

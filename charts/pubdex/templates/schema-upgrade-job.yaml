@@ -1,0 +1,176 @@
+{{- /*
+The schema upgrade: python -m people_pubs.schema upgrade, in the application
+image, brings the database to the schema of that image. It applies, in
+order, each schema change of the image that the database's record
+(pubdex.schema_changes) does not hold yet, each in a transaction of its own,
+and does nothing when none is outstanding. Before it changes anything it
+refuses a database it cannot bring there, and its log says why: kubectl logs
+job/<the Job's name>. It runs as the role that owns the schema and reads that
+role's password from a file, as ingestion does; it waits up to five minutes
+for the server to accept connections.
+
+Evaluation mode: a Job of each revision, <release>-schema-upgrade-<revision>,
+as postgres, with that role's password file and no other credential.
+
+- It is a resource of the release, not a hook, so it runs against the
+  release's own PostgreSQL: before helm install creates the release's
+  objects there is no database to upgrade. It starts with the other objects,
+  at the install and at every upgrade, and on a first start waits until the
+  database has been initialised.
+- helm install and helm upgrade --wait count a Job as ready once it has
+  started; --wait-for-jobs waits until it has completed, and fails when it
+  fails.
+- It is retried once (backoffLimit 1): in an upgrade that also replaces
+  PostgreSQL's pod, the first run can meet the old server as it shuts down.
+  A refusal fails the same way twice.
+- Helm deletes the Job of the previous revision at the upgrade, and the
+  current one at helm uninstall; until then it stays, with its log. The Job
+  of an upgrade that failed belongs to no revision that Helm keeps deployed,
+  so it stays until you delete it.
+
+External mode: a hook of helm install and helm upgrade, <release>-schema-upgrade,
+after the setup Job (externalDatabase.setup), as the admin role, with the
+setup's admin Secret key and TLS settings and no other credential.
+
+- It runs exactly when the setup runs: externalDatabase.setup.enabled means
+  that this run may use the admin role. A first install: the setup applies
+  the baseline schema, then this Job the schema changes. An upgrade with the
+  setup: the passwords, then the outstanding schema changes. A routine
+  upgrade, with the setup switched off, runs neither and needs no admin
+  Secret.
+- Not retried (backoffLimit 0). When it fails, the install or upgrade fails
+  before the release's other objects change. Helm deletes the setup's hooks
+  and this Job's ServiceAccount, and keeps the Job, with its pod, until the
+  next install or upgrade that runs the setup replaces it; one that succeeded
+  is deleted.
+*/ -}}
+{{- $external := eq .Values.mode "external" }}
+{{- if or (not $external) .Values.externalDatabase.setup.enabled }}
+{{- $secretDir := include "pubdex.secretDir" . }}
+{{- $setup := .Values.externalDatabase.setup }}
+{{- if $external }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "pubdex.schemaUpgradeName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pubdex.labels" (dict "root" $ "component" "schema-upgrade") | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+automountServiceAccountToken: false
+---
+{{- end }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "pubdex.schemaUpgradeJobName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pubdex.labels" (dict "root" $ "component" "schema-upgrade") | nindent 4 }}
+  {{- if $external }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+  {{- end }}
+spec:
+  backoffLimit: {{ ternary 0 1 $external }}
+  activeDeadlineSeconds: 900
+  template:
+    metadata:
+      labels:
+        {{- include "pubdex.labels" (dict "root" $ "component" "schema-upgrade") | nindent 8 }}
+        {{- with include "pubdex.podLabels" (dict "root" $ "component" "schema-upgrade") }}{{ . | nindent 8 }}{{ end }}
+      {{- with include "pubdex.podAnnotations" (dict "root" $ "component" "schema-upgrade") }}
+      annotations:
+        {{- . | nindent 8 }}
+      {{- end }}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ include "pubdex.schemaUpgradeName" . }}
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with include "pubdex.podScheduling" (dict "root" $ "component" "schema-upgrade") }}{{ . | nindent 6 }}{{ end }}
+      securityContext:
+        {{- include "pubdex.writerPodSecurityContext" . | nindent 8 }}
+      containers:
+        - name: schema-upgrade
+          image: {{ include "pubdex.image" .Values.image | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python", "-m", "people_pubs.schema", "upgrade", "--wait", "300"]
+          env:
+            - name: PGHOST
+              value: {{ include "pubdex.databaseHost" . | quote }}
+            - name: PGPORT
+              value: {{ include "pubdex.databasePort" . | quote }}
+            - name: PGDATABASE
+              value: {{ .Values.database.name | quote }}
+            {{- if $external }}
+            - name: PGUSER
+              value: {{ $setup.adminUser | quote }}
+            - name: PGSSLMODE
+              value: {{ .Values.externalDatabase.sslmode | quote }}
+            {{- with include "pubdex.sslRootCert" . }}
+            - name: PGSSLROOTCERT
+              value: {{ . | quote }}
+            {{- end }}
+            - name: PEOPLE_DB_PASSWORD_FILE
+              value: {{ printf "/run/secrets/pubdex-admin/%s" $setup.adminSecret.key | quote }}
+            {{- else }}
+            - name: PGUSER
+              value: postgres
+            - name: PEOPLE_DB_PASSWORD_FILE
+              value: {{ printf "%s/postgres_password" $secretDir }}
+            {{- end }}
+          securityContext:
+            {{- include "pubdex.containerSecurityContext" . | nindent 12 }}
+          {{- with .Values.schemaUpgrade.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            {{- if $external }}
+            - name: admin
+              mountPath: /run/secrets/pubdex-admin
+              readOnly: true
+            {{- with include "pubdex.caMount" . }}{{ . | nindent 12 }}{{ end }}
+            {{- else }}
+            - name: secrets
+              mountPath: {{ $secretDir }}
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        {{- if $external }}
+        # The admin role's password, as the setup Job mounts it; a missing
+        # Secret fails the run with a message that names the file.
+        - name: admin
+          secret:
+            secretName: {{ $setup.adminSecret.name | quote }}
+            defaultMode: 0440
+            optional: true
+            items:
+              - key: {{ $setup.adminSecret.key | quote }}
+                path: {{ $setup.adminSecret.key | quote }}
+        {{- with include "pubdex.caVolume" . }}{{ . | nindent 8 }}{{ end }}
+        {{- else }}
+        # The superuser's password only, readable by the group 10001 only.
+        - name: secrets
+          secret:
+            secretName: {{ include "pubdex.secretName" . | quote }}
+            defaultMode: 0440
+            items:
+              - key: postgres_password
+                path: postgres_password
+        {{- end }}
+{{- end }}

@@ -161,6 +161,16 @@ RUN useradd --create-home regress && chown -R regress /usr/src/postgresql
 USER regress
 RUN --network=none make -C /usr/src/postgresql check
 
+# The packages of the build stage -- the compiler, the headers and the tools
+# that built PostgreSQL -- one "<package> <version>" a line, sorted. The image
+# carries the list in /usr/share/doc/pubdex-postgres/build-packages.txt, from
+# which release.sh's provenance record takes it: the build log shows the list
+# only when the build stage's step runs, not when it comes from the build
+# cache, and the image's own package database names only what the image runs
+# with.
+FROM build AS build-packages
+RUN dpkg-query -W -f '${Package} ${Version}\n' | LC_ALL=C sort > /build-packages.txt
+
 FROM ${DEBIAN_BASE}
 ARG PG_MAJOR
 ARG PG_VERSION
@@ -196,6 +206,8 @@ COPY --from=entrypoint /usr/local/bin/docker-entrypoint.sh /usr/local/bin/docker
 # every copy to carry; Debian's packages carry theirs in /usr/share/doc.
 COPY --from=build /usr/src/postgresql/COPYRIGHT /usr/share/doc/pubdex-postgres/PostgreSQL-COPYRIGHT
 COPY --from=source /src/docker-library-postgres-LICENSE /usr/share/doc/pubdex-postgres/docker-entrypoint-LICENSE
+# The packages PostgreSQL was compiled with (stage build-packages).
+COPY --from=build-packages /build-packages.txt /usr/share/doc/pubdex-postgres/build-packages.txt
 ENV PG_MAJOR=${PG_MAJOR} \
     PG_VERSION=${PG_VERSION} \
     PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/lib/postgresql/${PG_MAJOR}/bin \

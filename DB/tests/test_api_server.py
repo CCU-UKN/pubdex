@@ -238,11 +238,12 @@ def test_the_service_imports_no_ingestion_configuration_or_provider_code() -> No
     assert proc.returncode == 0, proc.stderr
     # people_pubs.password_file is the shared reader of password files, and
     # people_pubs.connection_security the connection options shared with
-    # ingestion; neither imports anything of the package.
+    # ingestion. The shared schema contract imports no ingestion configuration
+    # or provider code either.
     assert proc.stdout.split() == [
         "people_pubs", "people_pubs.api", "people_pubs.api.app", "people_pubs.api.database",
         "people_pubs.api.server", "people_pubs.api.settings", "people_pubs.connection_security",
-        "people_pubs.password_file",
+        "people_pubs.password_file", "people_pubs.schema",
     ]
 
 

@@ -5,13 +5,15 @@ every stage is a stub that records its name, arguments and working directory,
 and fails or runs slowly when asked to. Stub `docker` and `git` executables
 stand in for the real ones; the stub `docker` reports an Engine and a Compose
 version, so that the version requirements can be checked, and a stub file
-stands where the pinned helm belongs. This pins, without Docker, the stage order, that
+stands where the pinned helm belongs; the stub `docker` also answers for the
+pinned SBOM tool's image. This pins, without Docker, the stage order, that
 the first failure stops the run with its own status, how --base/--head reach
 the transform-version guard and the check of the range's commits (the
 all-zero and empty first-push forms included), the prerequisite diagnostics,
 and what an interrupt or a timeout does. The last tests run the shell steps of
 the GitHub and Forgejo workflows with each forge's event context, and pin both
-workflows as thin adapters around this one command. That stage 1 cannot
+workflows as thin adapters around this one command, with the same time limit,
+that take no credential and have no step that could publish. That stage 1 cannot
 inherit database settings is proven with the real run_checks.sh in
 test_offline_isolation.py.
 """
@@ -43,6 +45,8 @@ STAGES = {
     "operator": "run_operator_acceptance.sh",
     "charts": "run_chart_checks.sh",
     "cluster": "run_cluster_acceptance.sh",
+    "rehearsal": "run_release_rehearsal.sh",
+    "upgrade": "run_upgrade_acceptance.sh",
 }
 ORDER = list(STAGES)
 COUNT = len(STAGES)
@@ -53,6 +57,8 @@ TOOL_VERSIONS = {tool: re.search(rf"^readonly PINNED_{tool.upper()}_VERSION=(\S+
 TOOLS = {tool: Path(".tools") / f"{tool}-{version}" / tool for tool, version in TOOL_VERSIONS.items()}
 HELM_VERSION = TOOL_VERSIONS["helm"]
 HELM = TOOLS["helm"]
+SYFT_IMAGE = re.search(r"^readonly PINNED_SYFT_IMAGE=(\S+)$",
+                       (ROOT / "DB" / "lib" / "sbom_tool.sh").read_text(encoding="utf-8"), re.M).group(1)
 
 STUB_STAGE = r'''#!/usr/bin/env bash
 name="@NAME@"
@@ -80,6 +86,7 @@ echo "$*" >> "$STUB_LOG.docker"
 case "$*" in
   "version --format {{.Server.Version}}") echo "${STUB_ENGINE:-29.9.1}" ;;
   "compose version --short") [ "${STUB_COMPOSE:-5.6.0}" = none ] && exit 1; echo "${STUB_COMPOSE:-5.6.0}" ;;
+  "image inspect "*) [ "${STUB_SBOM:-present}" = none ] && exit 1; echo sha256:stub ;;
 esac
 exit 0
 '''
@@ -109,6 +116,7 @@ class Fake:
         (self.root / "DB" / "lib").mkdir(parents=True)
         shutil.copy2(ROOT / "DB" / "lib" / "docker_versions.sh", self.root / "DB" / "lib")
         shutil.copy2(ROOT / "DB" / "lib" / "cluster_tools.sh", self.root / "DB" / "lib")
+        shutil.copy2(ROOT / "DB" / "lib" / "sbom_tool.sh", self.root / "DB" / "lib")
         # The suite only looks for them; stages 8 and 9 check their hashes and versions.
         for relative in TOOLS.values():
             _executable(self.root / relative, "#!/bin/sh\nexit 1\n")
@@ -175,12 +183,13 @@ def test_stages_run_in_order_from_any_directory(tmp_path: Path) -> None:
     assert all(call[1:] == [] for call in fake.calls()), "no stage gets arguments without a range"
     headers = [line for line in proc.stdout.splitlines() if line.startswith("==> Stage ") and "passed" not in line]
     assert [h.split(":")[0] for h in headers] == [f"==> Stage {n}/{COUNT}" for n in range(1, COUNT + 1)]
-    assert COUNT == 9 and f"PASS: all {COUNT} stages" in proc.stdout
+    assert COUNT == 11 and f"PASS: all {COUNT} stages" in proc.stdout
     for context in fake.lines(".context"):
         _name, cwd = context.split("\t")
         assert Path(cwd).resolve() == fake.root.resolve(), "stages run from the repository root"
-    assert fake.lines(".docker") == ["info", "version --format {{.Server.Version}}", "compose version --short"], (
-        "the daemon and the Compose plugin are probed, and their versions reported, before any stage"
+    assert fake.lines(".docker") == ["info", "version --format {{.Server.Version}}", "compose version --short",
+                                     f"image inspect --format {{{{.Id}}}} {SYFT_IMAGE}"], (
+        "the daemon, the Compose plugin and the SBOM tool are probed, and the versions reported, before any stage"
     )
     assert "Environment:" in proc.stdout and "  bash    " in proc.stdout
     assert "  docker  29.9.1" in proc.stdout and "  compose 5.6.0" in proc.stdout
@@ -290,7 +299,7 @@ def test_prerequisite_diagnostics(tmp_path: Path) -> None:
     for old in ("2.19.1", "2.20.0", "2.20.1", "2.20.2", "2.23.3", "2.24.0-rc.1", "v1.29.2"):
         proc = fake.run(STUB_COMPOSE=old)
         assert proc.returncode == 1 and f"Docker Compose {old} is too old" in proc.stderr, old
-        assert "stages 6 and 7 need the Compose plugin 2.24.0 or later" in proc.stderr
+        assert "stages 6, 7 and 11 need the Compose plugin 2.24.0 or later" in proc.stderr
         assert "Upgrade the Compose plugin" in proc.stderr
     for unknown in ("dev", "2.24"):
         proc = fake.run(STUB_COMPOSE=unknown)
@@ -300,6 +309,13 @@ def test_prerequisite_diagnostics(tmp_path: Path) -> None:
     for accepted in ("2.24.0", "v2.24.0", "2.24.6+ds1-0ubuntu1~22.04.1", "2.24.1-rc.1", "v2.39.1", "5.6.0"):
         assert fake.run(STUB_COMPOSE=accepted, STUB_FAIL="offline").returncode == 7, accepted
     fake.log.unlink()
+
+    # The pinned SBOM tool of stages 9-11 is looked for before any stage runs.
+    proc = fake.run(STUB_SBOM="none")
+    assert proc.returncode == 1 and "the pinned SBOM tool, Syft" in proc.stderr
+    assert "stages 9-11 build test releases with it" in proc.stderr
+    assert _hint(proc.stderr) == ["./release.sh setup"]
+    assert fake.calls() == []
 
     tools = _restricted_path(tmp_path, fake.bindir / "git")
     proc = fake.run(PATH=tools)
@@ -413,7 +429,7 @@ def _hint(stderr: str) -> list:
     """The commands a message for a missing prerequisite gives: the indented
     lines after the one that says how to create or install it."""
     lines = stderr.splitlines()
-    start = next(index for index, line in enumerate(lines) if line.endswith(" it from the repository root with:"))
+    start = next(index for index, line in enumerate(lines) if line.endswith(" from the repository root with:"))
     commands = []
     for line in lines[start + 1:]:
         if not line.startswith("  "):
@@ -524,6 +540,7 @@ def test_the_gitlab_example_installs_the_requirements_and_hands_the_suite_its_ra
     _executable(checkout / "run_ci_suite.sh", f'#!/bin/sh\necho "suite $*" >> "{log}"\n')
     _executable(checkout / "setup_venv.sh", f'#!/bin/sh\necho "setup $*" >> "{log}"\n')
     _executable(checkout / "setup_cluster_tools.sh", f'#!/bin/sh\necho "tools $*" >> "{log}"\n')
+    _executable(checkout / "release.sh", f'#!/bin/sh\necho "release $*" >> "{log}"\n')
     environment = {key: value for key, value in os.environ.items() if not key.startswith("CI_")}
     environment.update(variables, CI_COMMIT_SHA=HEAD_SHA)
     # As a shell executor runs them: Bash, stopping at the first failure.
@@ -534,8 +551,19 @@ def test_the_gitlab_example_installs_the_requirements_and_hands_the_suite_its_ra
     assert log.read_text(encoding="utf-8").splitlines() == [
         "setup --python python3.11",
         "tools ",
+        "release setup",
         f"suite --base {base} --head {HEAD_SHA}",
     ]
+
+
+# What belongs in a tracked script, never in a workflow: the suite's own
+# commands and stages, and every step of release.sh but the tool's setup.
+NOT_IN_A_WORKFLOW = ("pytest", "docker", "psql", "postgres", "services:", "secrets.", "pip install", "-m venv",
+                     "install_pip", "install_locked", "fetch_verified",
+                     "run_checks.sh", "run_integration_tests", "run_migration_smoke", "run_task_1a_demo",
+                     "run_stack_acceptance", "run_operator_acceptance", "build_image", "create_secrets", "helm",
+                     "kubectl", "run_chart_checks", "run_cluster_acceptance", "run_release_rehearsal",
+                     "run_upgrade_acceptance", "release.sh build", "release.sh verify", "release.sh publish", "syft")
 
 
 def test_public_ci_is_only_an_adapter_around_the_suite() -> None:
@@ -545,11 +573,8 @@ def test_public_ci_is_only_an_adapter_around_the_suite() -> None:
     assert './run_ci_suite.sh --base "$BASE" --head "$HEAD"' in steps
     assert "./setup_venv.sh --python python" in steps
     assert "run: ./setup_cluster_tools.sh\n" in steps
-    for forbidden in ("pytest", "docker", "psql", "postgres", "services:", "secrets.", "pip install", "-m venv",
-                      "install_pip", "install_locked", "fetch_verified",
-                      "run_checks.sh", "run_integration_tests", "run_migration_smoke", "run_task_1a_demo",
-                      "run_stack_acceptance", "build_image", "create_secrets", "helm", "kubectl", "run_chart_checks",
-                      "run_cluster_acceptance"):
+    assert "run: ./release.sh setup\n" in steps
+    for forbidden in NOT_IN_A_WORKFLOW:
         assert forbidden not in steps, f"{forbidden!r} belongs in a tracked script, not in the workflow"
     assert "contents: read" in steps
     assert "fetch-depth: 0" in steps
@@ -648,6 +673,7 @@ def test_each_ci_adapter_installs_the_requirements_and_hands_the_suite_its_event
     _executable(checkout / "run_ci_suite.sh", f'#!/bin/sh\necho "suite $*" >> "{log}"\n')
     _executable(checkout / "setup_venv.sh", f'#!/bin/sh\necho "setup $*" >> "{log}"\n')
     _executable(checkout / "setup_cluster_tools.sh", f'#!/bin/sh\necho "tools $*" >> "{log}"\n')
+    _executable(checkout / "release.sh", f'#!/bin/sh\necho "release $*" >> "{log}"\n')
     environment = {key: value for key, value in os.environ.items() if key not in variables}
     environment.update(variables)
     # As both runners execute run steps: Bash, stopping at the first failure.
@@ -655,7 +681,36 @@ def test_each_ci_adapter_installs_the_requirements_and_hands_the_suite_its_event
                           capture_output=True, text=True, timeout=60)
     assert proc.returncode == 0, proc.stderr
     calls = log.read_text(encoding="utf-8").splitlines()
-    assert calls == [f"setup --python {interpreter}", "tools ", f"suite --base {base} --head {head}"]
+    assert calls == [f"setup --python {interpreter}", "tools ", "release setup",
+                     f"suite --base {base} --head {head}"]
+
+
+@pytest.mark.parametrize("forge", list(ADAPTERS))
+def test_no_ci_adapter_takes_a_credential_or_has_a_step_that_could_publish(forge: str) -> None:
+    workflow, _names, interpreter = ADAPTERS[forge]
+    code = "\n".join(line.split("#", 1)[0].rstrip() for line in workflow.read_text(encoding="utf-8").splitlines())
+    expressions, commands = _adapter_job(workflow)
+    # The job's commands are the three setups and the suite, and no other:
+    # of release.sh only the step that pulls the SBOM tool, never build,
+    # verify or publish.
+    assert commands == [f"./setup_venv.sh --python {interpreter}", "./setup_cluster_tools.sh", "./release.sh setup",
+                        './run_ci_suite.sh --base "$BASE" --head "$HEAD"']
+    # Its only actions are the checkout and, on GitHub, the interpreter: none
+    # that logs in to a registry or uploads anything.
+    actions = [use.split("@", 1)[0].rsplit("/", 1)[-1] for use in re.findall(r"uses: (\S+)", code)]
+    assert actions == (["checkout", "setup-python"] if forge == "github" else ["checkout"])
+    # All it takes from the forge are the event's two commits: no secret and
+    # no token reaches a step, and the checkout does not keep the forge's own.
+    assert list(expressions) == ["BASE", "HEAD"]
+    assert re.findall(r"\$\{\{.*?\}\}", code) == list(expressions.values())
+    assert "persist-credentials: false" in code
+    for forbidden in ("secret", "token", "password", "login", "publish", "upload", "packages", "write"):
+        assert forbidden not in code.lower(), f"{forbidden!r}: the job holds no credential and publishes nothing"
+    # GitHub's token may read the repository and nothing more; Forgejo
+    # documents the key as ignored, so its adapter sets none.
+    permissions = re.findall(r"^permissions:[ ]*\n((?:[ ]+\S.*\n)+)", code, re.M)
+    assert permissions == (["  contents: read\n"] if forge == "github" else [])
+    assert code.count("permissions:") == len(permissions), "no job or step widens the permissions"
 
 
 def test_the_forgejo_adapter_runs_on_a_host_runner_with_forgejo_hosted_actions() -> None:
@@ -665,11 +720,8 @@ def test_the_forgejo_adapter_runs_on_a_host_runner_with_forgejo_hosted_actions()
     assert './run_ci_suite.sh --base "$BASE" --head "$HEAD"' in code
     assert "./setup_venv.sh --python python3.11" in code
     assert "run: ./setup_cluster_tools.sh\n" in code
-    for forbidden in ("pytest", "docker", "psql", "postgres", "services:", "secrets.", "pip install", "-m venv",
-                      "install_pip", "install_locked", "fetch_verified",
-                      "run_checks.sh", "run_integration_tests", "run_migration_smoke", "run_task_1a_demo",
-                      "run_stack_acceptance", "build_image", "create_secrets", "helm", "kubectl", "run_chart_checks",
-                      "run_cluster_acceptance"):
+    assert "run: ./release.sh setup\n" in code
+    for forbidden in NOT_IN_A_WORKFLOW:
         assert forbidden not in code, f"{forbidden!r} belongs in a tracked script, not in the workflow"
     assert "fetch-depth: 0" in code and "persist-credentials: false" in code and "timeout-minutes:" in code
     # ... for a runner that runs the job on its host, under the label the
@@ -690,8 +742,8 @@ def test_the_forgejo_adapter_runs_on_a_host_runner_with_forgejo_hosted_actions()
 
     assert pins(github) == pins(forgejo)
 
-    # Both give the job the same time limit, set for the nine-stage suite, and
-    # the description of the Forgejo job states that limit.
+    # Both give the job the same time limit, set for the complete suite, and
+    # the descriptions of both jobs state that limit.
     def limit(text: str) -> str:
         limits = re.findall(r"^    timeout-minutes: (\d+)$", text, re.M)
         assert len(limits) == 1, limits
@@ -699,4 +751,5 @@ def test_the_forgejo_adapter_runs_on_a_host_runner_with_forgejo_hosted_actions()
 
     assert limit(github) == limit(forgejo)
     strategy = " ".join((ROOT / "DB" / "TESTING_STRATEGY.md").read_text(encoding="utf-8").split())
-    assert f"under a {limit(github)}-minute limit: the same three steps and the same limit as on GitHub" in strategy
+    assert f"under a {limit(github)}-minute limit: the same four steps and the same limit as on GitHub" in strategy
+    assert f"The job's limit is {limit(github)} minutes" in strategy

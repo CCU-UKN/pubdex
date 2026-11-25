@@ -109,7 +109,7 @@ def _subcommand(words: list) -> str:
 
 
 def _steps_named(ran_by: str) -> list:
-    """The step numbers of "stage 9, step 4", "steps 13 and 20", "steps 25 to 29"."""
+    """The step numbers of "stage 9, step 4", "steps 13 and 20", "steps 30 to 34"."""
     words = ran_by.split(",", 1)[1]
     numbers = []
     for first, last in re.findall(r"(\d+)(?: to (\d+))?", words):
@@ -129,7 +129,8 @@ def _functions(lines: list) -> tuple:
         if not match:
             number += 1
             continue
-        rest = match.group(2).rstrip()
+        # A one-line function may be followed by a comment: f() { ...; }  # ...
+        rest = re.sub(r"\s+#[^\"'`]*$", "", match.group(2).rstrip())
         if rest.endswith("}") and not rest.lstrip().startswith("#"):
             functions[match.group(1)], end = rest, number
         else:
@@ -256,8 +257,8 @@ def test_the_step_parser_reads_the_script() -> None:
     assert {("kubectl", "create namespace"), ("kubectl", "label namespace"),
             ("kubectl", "create secret")} <= _runs(steps[4]), "through restricted_namespace"
     assert ("helm", "install") in _runs(steps[6]) and ("helm", "install") not in _runs(steps[4])
-    assert {("kubectl", "rollout restart"), ("kubectl", "rollout status")} <= _runs(steps[17]), "through restart_api"
-    assert ("helm", "rollback") in _runs(steps[19]) and ("helm", "rollback") not in _runs(steps[18])
+    assert {("kubectl", "rollout restart"), ("kubectl", "rollout status")} <= _runs(steps[18]), "through restart_api"
+    assert ("helm", "rollback") in _runs(steps[20]) and ("helm", "rollback") not in _runs(steps[19])
     assert "--namespace" in steps[6], "through helm_run"
     for expected in [("helm", "upgrade"), ("helm", "uninstall"), ("helm", "test"), ("helm", "history"),
                      ("kubectl", "exec"), ("kubectl", "run"), ("kubectl", "port-forward"), ("kubectl", "create job")]:
@@ -268,19 +269,19 @@ def test_the_step_parser_reads_the_script() -> None:
 @pytest.mark.parametrize(
     ("change", "found"),
     [
-        (("| stage 9, steps 6 and 26 |", "| stage 9, step 5 |"), "steps [5] do not run helm install"),
-        (("| stage 9, steps 6 and 26 |", "| stage 9, steps 5 and 26 |"), "step 5 runs none of its commands"),
-        (("| stage 9, steps 6 and 26 |", "| stage 9, steps 6 and 30 |"), "stage 9 has no step [30]"),
-        (("| stage 9, steps 6 and 26 |", "| tested |"), "says neither of"),
-        (("--wait` | stage 9, step 18 |", "--wait` | stage 9, step 16 |"), "never use --set"),
-        (("serviceaccount` | stage 9, step 18 |", "serviceaccount` | stage 9, step 19 |"),
-         "steps [19] do not run kubectl delete"),
+        (("| stage 9, steps 6, 14 and 32 |", "| stage 9, step 5 |"), "steps [5] do not run helm install"),
+        (("| stage 9, steps 6, 14 and 32 |", "| stage 9, steps 5 and 32 |"), "step 5 runs none of its commands"),
+        (("| stage 9, steps 6, 14 and 32 |", "| stage 9, steps 6 and 36 |"), "stage 9 has no step [36]"),
+        (("| stage 9, steps 6, 14 and 32 |", "| tested |"), "says neither of"),
+        (("--wait` | stage 9, steps 19 and 23 |", "--wait` | stage 9, step 17 |"), "never use --set"),
+        (("serviceaccount` | stage 9, step 19 |", "serviceaccount` | stage 9, step 20 |"),
+         "steps [20] do not run kubectl delete"),
         (("--values values-demo.yaml --wait", "--values values-demo.yaml --atomic --wait"), "never use --atomic"),
         (("020_role_passwords.sh --stdin\n", "020_role_passwords.sh --file\n"), "not in its block"),
         (("[`test_render_network.py`](charts/tests/test_render_network.py)",
           "[`test_render_ingress.py`](charts/tests/test_render_ingress.py)"), "names no stage 8 test file"),
         (("\n## Ingress and TLS\n", "\n## Ingress\n"), "its block is in the section 'Ingress'"),
-        (("| stage 9, steps 13, 20 and 29 |", "| stage 9, steps 13 to 29 |"), "runs none of its commands"),
+        (("| stage 9, steps 13, 14, 21, 26 and 35 |", "| stage 9, steps 13 to 35 |"), "runs none of its commands"),
     ],
 )
 def test_a_wrong_row_would_be_found(change: tuple, found: str | None) -> None:

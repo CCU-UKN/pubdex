@@ -2,11 +2,15 @@
 # The complete integration suite against its own disposable PostgreSQL.
 #
 # Starts a PostgreSQL container with DB/init/ mounted, waits until the schema
-# has bootstrapped, and runs ./run_integration_tests.sh against it. It then
+# has bootstrapped, brings the database to the schema of this checkout with
+# the schema upgrade (python -m people_pubs.schema upgrade), as every
+# deployment does, and runs ./run_integration_tests.sh against it. It then
 # re-applies init/010_ingestion_runtime_schema.sql to the same database and
 # reruns the publication-view and role tests, so the read views and the
 # grants of app_writer, app_readonly and maintenance are also proven on a
-# database the runtime patch has been applied to twice. Every integration test
+# database the runtime patch has been applied to twice. Finally, it restores
+# an explicit synthetic backup through restore_db.sh, checks its record, values,
+# ownership and schema support, and reruns the same permission tests. Every integration test
 # has to run: a skipped test fails the run, so a broken database binding can
 # never pass as an empty green run.
 #
@@ -26,16 +30,18 @@
 #   - PostgreSQL is published only on a loopback port Docker picks, the init
 #     scripts are mounted read-only, and Docker Compose is never used.
 #   - The superuser password is generated for this run. Docker receives it by
-#     variable name and the test command only through its environment, which
-#     the shell exports itself, so neither the password nor the connection
-#     string appears on any command line. It is never printed and never
-#     written to a file, and the test output and every container diagnostic
-#     are filtered, so that a test or a log line echoing it cannot show it.
-#   - The tests run in an environment from which every exported variable and
-#     function has been removed; in it the test DSNs, the application DSN and
-#     the libpq connection settings all name the disposable database, so no
-#     inherited variable can point a test at any other database, and
-#     PEOPLE_PUBS_SKIP_DOTENV=1 keeps people_pubs from reading DB/.env at all.
+#     variable name, and the schema upgrade and the test command only through
+#     their environment, which the shell exports itself, so neither the
+#     password nor the connection string appears on any command line. It is
+#     never printed and never written to a file, and the output of the schema
+#     upgrade and the tests and every container diagnostic are filtered, so
+#     that a test or a log line echoing it cannot show it.
+#   - The schema upgrade and the tests run in an environment from which every
+#     exported variable and function has been removed; in it the test DSNs,
+#     the application DSN and the libpq connection settings all name the
+#     disposable database, so no inherited variable can point a test at any
+#     other database, and PEOPLE_PUBS_SKIP_DOTENV=1 keeps people_pubs from
+#     reading DB/.env at all.
 #   - The container lifecycle is shared with the other Docker-backed scripts
 #     through lib/disposable_postgres.sh.
 #
@@ -85,10 +91,10 @@ source "$DB_DIR/lib/disposable_postgres.sh"
 pg_begin_run
 pg_make_workdir
 
-echo "[1/5] Starting disposable PostgreSQL ($IMAGE) with DB/init/ mounted read-only (run $RUN_ID)..."
+echo "[1/6] Starting disposable PostgreSQL ($IMAGE) with DB/init/ mounted read-only (run $RUN_ID)..."
 pg_start loopback
 
-echo "[2/5] Waiting for the schema to bootstrap (${PG_INIT_SCRIPTS[*]}), up to ${WAIT_SECONDS}s..."
+echo "[2/6] Waiting for the schema to bootstrap (${PG_INIT_SCRIPTS[*]}), up to ${WAIT_SECONDS}s..."
 pg_wait_for_bootstrap
 pg_report_server
 pg_loopback_port
@@ -164,7 +170,18 @@ run_tests() {
   return 0
 }
 
-echo "[3/5] Running the integration suite (run_integration_tests.sh${*:+ $*})..."
+echo "[3/6] Applying the schema upgrade (python -m people_pubs.schema upgrade)..."
+set +e
+(cd "$DB_DIR" && run_isolated "$PYTHON" -m people_pubs.schema upgrade) 2>&1 | mask_password
+status="${PIPESTATUS[0]}"
+set -e
+if [ "$status" -ne 0 ]; then
+  echo "FAIL: the schema upgrade exited with status $status." >&2
+  pg_diagnose
+  exit "$status"
+fi
+
+echo "[4/6] Running the integration suite (run_integration_tests.sh${*:+ $*})..."
 status=0
 run_tests "$WORKDIR/suite.xml" "$@" || status=$?
 if [ "$status" -ne 0 ]; then
@@ -173,7 +190,7 @@ if [ "$status" -ne 0 ]; then
   exit "$status"
 fi
 
-echo "[4/5] Re-applying init/010_ingestion_runtime_schema.sql to the same database..."
+echo "[5/6] Re-applying init/010_ingestion_runtime_schema.sql to the same database..."
 if ! docker exec "$CONTAINER" psql -v ON_ERROR_STOP=1 -q -U postgres -d people_db \
      -f /docker-entrypoint-initdb.d/010_ingestion_runtime_schema.sql \
      >/dev/null 2>"$WORKDIR/reapply.log"; then
@@ -184,7 +201,7 @@ if ! docker exec "$CONTAINER" psql -v ON_ERROR_STOP=1 -q -U postgres -d people_d
 fi
 echo "      re-applied cleanly"
 
-echo "[5/5] Rerunning the publication-view and role tests after the re-application..."
+echo "[6/6] Rerunning the publication-view and role tests after the re-application..."
 status=0
 run_tests "$WORKDIR/rerun.xml" "${RERUN_TESTS[@]}" || status=$?
 if [ "$status" -ne 0 ]; then
@@ -194,3 +211,8 @@ if [ "$status" -ne 0 ]; then
 fi
 
 echo "PASS: integration suite, runtime-patch re-application and view and role rerun on a disposable database."
+
+echo "Checking the development restore helper with an explicit synthetic backup..."
+(cd "$DB_DIR" && run_isolated "$PYTHON" -m tests.restore_helper_check "$CONTAINER" "$WORKDIR") 2>&1 | mask_password
+run_tests "$WORKDIR/restored.xml" "${RERUN_TESTS[@]}"
+echo "PASS: development restore preserved data, schema support, ownership and role boundaries."

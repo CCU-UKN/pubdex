@@ -125,32 +125,29 @@ def test_images_follow_the_values(helm, case: str) -> None:
             assert container["imagePullPolicy"] == image["pullPolicy"], f"{pod.where}, {container['name']}"
 
 
-def test_the_default_images_are_the_published_release_pinned_by_digest(helm) -> None:
+def test_the_default_images_name_the_chart_version_without_digests(helm) -> None:
     values, chart = chart_values(), _chart()
-    record = (ROOT / "TASK_2A.md").read_text(encoding="utf-8")
     for key in ("image", "postgresImage"):
         assert values[key]["tag"] == chart["appVersion"], key
-        assert re.fullmatch(r"sha256:[0-9a-f]{64}", values[key]["digest"]), key
-        assert values[key]["digest"] in record, f"{key}: the digest of the published {chart['appVersion']} image"
+        assert values[key]["digest"] == "", key
     for pod in pod_templates(helm.template(*DEFAULT)):
         for container in containers(pod):
-            assert re.search(r"@sha256:[0-9a-f]{64}$", container["image"]), container["name"]
+            assert container["image"].endswith(":" + chart["appVersion"])
 
 
 @pytest.mark.parametrize(
     "settings, api, postgresql",
     [
-        ([], "ghcr.io/ccu-ukn/pubdex:0.1.0@sha256:{a}", "ghcr.io/ccu-ukn/pubdex-postgres:0.1.0@sha256:{p}"),
-        (["image.digest=", "postgresImage.digest="], "ghcr.io/ccu-ukn/pubdex:0.1.0", "ghcr.io/ccu-ukn/pubdex-postgres:0.1.0"),
-        (["image.tag=", "postgresImage.tag="], "ghcr.io/ccu-ukn/pubdex@sha256:{a}", "ghcr.io/ccu-ukn/pubdex-postgres@sha256:{p}"),
+        (["image.digest=sha256:" + "1" * 64, "postgresImage.digest=sha256:" + "2" * 64], "ghcr.io/ccu-ukn/pubdex:0.2.0@sha256:{a}", "ghcr.io/ccu-ukn/pubdex-postgres:0.2.0@sha256:{p}"),
+        (["image.digest=", "postgresImage.digest="], "ghcr.io/ccu-ukn/pubdex:0.2.0", "ghcr.io/ccu-ukn/pubdex-postgres:0.2.0"),
+        (["image.tag=", "postgresImage.tag=", "image.digest=sha256:" + "1" * 64, "postgresImage.digest=sha256:" + "2" * 64], "ghcr.io/ccu-ukn/pubdex@sha256:{a}", "ghcr.io/ccu-ukn/pubdex-postgres@sha256:{p}"),
         (["image.registry=", "image.repository=pubdex", "image.tag=local", "image.digest="], "pubdex:local",
-         "ghcr.io/ccu-ukn/pubdex-postgres:0.1.0@sha256:{p}"),
+         "ghcr.io/ccu-ukn/pubdex-postgres:0.2.0"),
     ],
     ids=["tag-and-digest", "tag-only", "digest-only", "no-registry"],
 )
 def test_image_references_are_built_from_their_parts(helm, settings: list, api: str, postgresql: str) -> None:
-    values = chart_values()
-    digests = {"a": values["image"]["digest"][7:], "p": values["postgresImage"]["digest"][7:]}
+    digests = {"a": "1" * 64, "p": "2" * 64}
     args = [arg for setting in settings for arg in ("--set", setting)]
     for pod in pod_templates(helm.template(*DEFAULT, *args)):
         for container in containers(pod):
@@ -269,7 +266,7 @@ def test_the_notes_render_with_the_release_its_access_and_the_exposure_warning(h
             assert f"The setup Job {RELEASE}-setup prepared it as {server['setup']['adminUser']}" in notes
             assert f"delete secret {server['setup']['adminSecret']['name']}" in notes
         else:
-            assert "Run charts/pubdex/files/external-setup.sh" in notes
+            assert "Run files/external-setup.sh of this chart" in notes
         return
     assert f"rollout status statefulset/{RELEASE}-postgresql" in notes
     kept = values["postgresql"]["persistence"]["retainOnUninstall"]

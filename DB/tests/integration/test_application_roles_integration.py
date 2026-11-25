@@ -24,9 +24,13 @@ permission model DB/init/ sets up, granting nothing themselves:
   does for the superuser;
 - every table and view grants each role what the model gives it: SELECT to
   app_readonly; SELECT, INSERT, UPDATE and DELETE on the tables of app,
-  biblio and activity to app_writer, and on the tables of pii to maintenance,
-  which gets no application schema; and USAGE, but not CREATE, on the schema
-  that holds the extensions;
+  biblio and activity to app_writer, with USAGE on each of their sequences,
+  and on the tables of pii to maintenance, which gets no application schema;
+  and USAGE, but not CREATE, on the schema that holds the extensions;
+- the record of schema changes, pubdex.schema_changes, which the schema
+  upgrade adds to this database before the tests: app_readonly and app_writer
+  may read it and nothing else of the schema pubdex, maintenance and PUBLIC
+  nothing of it;
 - app_writer refreshes the two serving snapshots through
   biblio.refresh_serving_snapshots(), which runs as their owner with a fixed
   search_path, and may neither refresh, alter nor drop them directly; no
@@ -320,6 +324,15 @@ def test_every_application_relation_grants_each_role_its_privileges() -> None:
             """,
             (list(READABLE_SCHEMAS),),
         ).fetchall()
+        sequences = conn.execute(
+            """
+            SELECT format('%%I.%%I', n.nspname, c.relname) AS name,
+                   has_sequence_privilege('app_writer', c.oid, 'USAGE') AS writer_usage
+            FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = ANY(%s) AND c.relkind = 'S'
+            """,
+            (list(APPLICATION_SCHEMAS),),
+        ).fetchall()
     assert {r["schema"] for r in relations} >= set(APPLICATION_SCHEMAS)
     names = {f"{r['schema']}.{r['name']}" for r in relations}
     assert {"biblio.publications", "biblio.authorships", "app.people"} | set(DOCUMENTED_VIEWS) <= names
@@ -327,6 +340,8 @@ def test_every_application_relation_grants_each_role_its_privileges() -> None:
     application = [r for r in relations if r["schema"] in APPLICATION_SCHEMAS]
     assert [f"{r['schema']}.{r['name']}" for r in application if not r["writer_select"]] == []
     assert [f"{r['schema']}.{r['name']}" for r in application if r["kind"] in ("r", "p") and not r["writer_dml"]] == []
+    assert sequences, "the application schemas have sequences"
+    assert [s["name"] for s in sequences if not s["writer_usage"]] == []
     assert extension_schemas, "the extensions are installed"
     for schema in extension_schemas:
         assert schema["reader_usage"] and schema["writer_usage"] and schema["maintenance_usage"], schema["schema"]
@@ -336,6 +351,26 @@ def test_every_application_relation_grants_each_role_its_privileges() -> None:
     }
     assert {t["name"] for t in pii_tables} >= {"people_pii", "orcid_emails", "publication_author_emails"}
     assert [t["name"] for t in pii_tables if not t["maintenance_dml"]] == []
+
+
+def test_the_application_roles_read_the_record_of_schema_changes_and_nothing_else_of_it() -> None:
+    for role in ("app_readonly", "app_writer"):
+        with connected_as(role) as conn:
+            numbers = [row["number"] for row in conn.execute(
+                "SELECT number FROM pubdex.schema_changes ORDER BY number").fetchall()]
+            assert numbers and numbers == list(range(1, len(numbers) + 1)), role
+            assert _refused(conn, "INSERT INTO pubdex.schema_changes (number, name, sha256, backward_compatible, "
+                                  "release) VALUES (9999, '9999_probe', repeat('0', 64), true, 'probe')"), role
+            assert _refused(conn, "UPDATE pubdex.schema_changes SET release = 'probe'"), role
+            assert _refused(conn, "DELETE FROM pubdex.schema_changes"), role
+            assert _refused(conn, "CREATE TABLE pubdex.probe (id int)"), role
+    with connected_as("maintenance") as conn:
+        assert _refused(conn, "SELECT number FROM pubdex.schema_changes")
+    with psycopg.connect(_dsn(), row_factory=dict_row) as conn:
+        public = conn.execute(
+            "SELECT count(*) AS n FROM pg_namespace n, aclexplode(n.nspacl) a WHERE n.nspname = 'pubdex' "
+            "AND a.grantee = 0").fetchone()["n"]
+    assert public == 0, "PUBLIC has no privilege on the schema pubdex"
 
 
 SNAPSHOTS = ("biblio.publication_dedup_map_web", "biblio.publications_canon_web")

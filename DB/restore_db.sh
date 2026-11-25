@@ -267,13 +267,14 @@ docker exec "${CONTAINER}" createdb -U "${DB_USER}" "${DB_NAME}"
 echo "Restoring dump into ${DB_NAME}..."
 # --single-transaction + --exit-on-error: a partial restore rolls back and
 # fails loudly instead of leaving a silently incomplete database.
+# Restore as DB_USER, retaining the dump's ACLs (including schema_changes
+# and default privileges). The referenced roles must already exist.
 cat "${DUMP_FILE}" | docker exec -i "${CONTAINER}" pg_restore \
   -U "${DB_USER}" \
   -d "${DB_NAME}" \
   --clean \
   --if-exists \
   --no-owner \
-  --no-privileges \
   --single-transaction \
   --exit-on-error
 

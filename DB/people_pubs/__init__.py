@@ -11,6 +11,8 @@ from __future__ import annotations
 # stamped into biblio.publications.source_provenance[*].transform_version.
 # It is not the release version of PubDex images and releases (VERSION in
 # the repository root).
+# 1.5.4 (2026-11-18): every ingestion connection checks the recorded schema
+# version before any write; apart from this stamp, importers write the same rows.
 # 1.5.3 (2026-10-28): every database connection requires SCRAM
 # authentication and leaves GSSAPI encryption off unless its connection
 # string or libpq's environment chooses otherwise
@@ -47,4 +49,4 @@ from __future__ import annotations
 # failures as retryable errors instead of completed no-payload lookups.
 # 1.1.0 (2026-07-17): new writer surface added; no importer transform
 # changed, so existing source_provenance stamps are unaffected.
-__version__ = "1.5.3"
+__version__ = "1.5.4"

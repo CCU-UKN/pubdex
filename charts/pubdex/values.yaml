@@ -22,20 +22,22 @@
 # Default: evaluation.
 mode: evaluation
 
-# The application image: the read service, the ingestion commands and the
-# schema bootstrap. The reference is <registry>/<repository>:<tag>@<digest>;
-# with a digest the node pulls exactly that image and the tag is only a
-# label. An empty registry leaves the repository as it is (for example an
-# image loaded into the nodes); an empty digest pulls by tag.
+# The application image: the read service, the ingestion commands, the
+# schema bootstrap and the schema upgrade. The reference is
+# <registry>/<repository>:<tag>@<digest>; with a digest the node pulls
+# exactly that image and the tag is only a label. An empty registry leaves
+# the repository as it is (for example an image loaded into the nodes); an
+# empty digest pulls by tag. Set both digests from the release record before
+# installing: a tag can be moved, while a digest identifies the exact image.
 image:
   # Default: ghcr.io
   registry: ghcr.io
   # Default: ccu-ukn/pubdex
   repository: ccu-ukn/pubdex
-  # Default: "0.1.0", the chart's appVersion.
-  tag: "0.1.0"
-  # Default: the digest of the published 0.1.0 image (linux/amd64).
-  digest: "sha256:24d570015b20f222c767a8bb89dd18d792abbd25cc730137f7b8bc285df6a325"
+  # Default: "0.2.0", the chart's appVersion.
+  tag: "0.2.0"
+  # Default: empty; set the application digest from the release record.
+  digest: ""
   # Always, IfNotPresent or Never. Default: IfNotPresent.
   pullPolicy: IfNotPresent
 
@@ -46,10 +48,10 @@ postgresImage:
   registry: ghcr.io
   # Default: ccu-ukn/pubdex-postgres
   repository: ccu-ukn/pubdex-postgres
-  # Default: "0.1.0"
-  tag: "0.1.0"
-  # Default: the digest of the published 0.1.0 PostgreSQL image (linux/amd64).
-  digest: "sha256:33988fb179e2065e653ad7813cecf812c21f4381537b8b8db546ad37236b780a"
+  # Default: "0.2.0"
+  tag: "0.2.0"
+  # Default: empty; set the PostgreSQL digest from the release record.
+  digest: ""
   # Default: IfNotPresent.
   pullPolicy: IfNotPresent
 
@@ -100,8 +102,10 @@ secrets:
   #                           mode only
   #   app_readonly_password   app_readonly, the read service's role
   #   app_writer_password     app_writer, the ingestion role
-  # Create it from those files, for example:
-  #   ./create_secrets.sh
+  # Create it from those files, for example with create_secrets.sh, which is
+  # in the root of the PubDex source of this chart's version and, in the
+  # application image, /opt/pubdex/create_secrets.sh:
+  #   bash create_secrets.sh
   #   kubectl create secret generic pubdex-credentials \
   #     --from-file=secrets/postgres_password \
   #     --from-file=secrets/app_readonly_password \
@@ -226,24 +230,30 @@ externalDatabase:
     key: ca.crt
   # The setup Job, a hook of helm install and helm upgrade that runs before
   # the release's other objects change. As the admin role it applies the
-  # schema of the application image when the database has none, then on
-  # every run sets the passwords of app_readonly and app_writer from
+  # baseline schema of the application image when the database has none,
+  # then on every run sets the passwords of app_readonly and app_writer from
   # secrets.name and lets only these roles and the owner connect. Before it
   # changes anything it checks the server, the admin role's privileges and
   # the roles and schema already there; a failed check fails the install or
   # upgrade, and kubectl logs job/<release>-setup says why. The script is
-  # charts/pubdex/files/external-setup.sh; its header lists every check.
+  # files/external-setup.sh of this chart; its header lists every check.
+  # After it, as the same role, the schema upgrade Job
+  # <release>-schema-upgrade applies the schema changes of the application
+  # image that the database does not have yet (schemaUpgrade).
   setup:
-    # false: the chart renders no setup Job. Two uses:
-    #   - a routine upgrade, which changes no password: pass
+    # false: the chart renders neither the setup Job nor the schema upgrade
+    # Job. Two uses:
+    #   - a routine upgrade, which changes no password and no schema: pass
     #     --set externalDatabase.setup.enabled=false to that upgrade alone,
     #     and the admin Secret need not exist (KUBERNETES.md, Upgrade). A
-    #     password change needs the setup: never put this switch in a values
-    #     file you give to every upgrade, and give that upgrade the values
-    #     files, not --reuse-values, which would keep the switch;
+    #     password change and an upgrade to images with new schema changes
+    #     need the setup: never put this switch in a values file you give to
+    #     every upgrade, and give that upgrade the values files, not
+    #     --reuse-values, which would keep the switch;
     #   - no setup Job ever: you run the same script by hand, once before the
-    #     first install and again after each change of the passwords
-    #     (KUBERNETES.md, Installing without the setup Job).
+    #     first install and again after each change of the passwords, and the
+    #     schema upgrade before the first install and before each upgrade to
+    #     new images (KUBERNETES.md, Installing without the setup Job).
     # Default: true.
     enabled: true
     # The admin role: owns the database and has CREATEROLE, or is a
@@ -269,6 +279,30 @@ externalDatabase:
       requests:
         cpu: 50m
         memory: 64Mi
+
+# The schema upgrade, python -m people_pubs.schema upgrade in the application
+# image: it applies the schema changes of the image that the database does
+# not have yet, in order, each in a transaction of its own, and does nothing
+# when none is outstanding. Before it changes anything it refuses a database
+# it cannot bring to the image's schema, and its log says why.
+#   evaluation   the Job <release>-schema-upgrade-<revision>, part of every
+#                revision, as postgres: it runs with the release's other
+#                objects at the install and at every upgrade, once PostgreSQL
+#                accepts connections; kubectl logs job/<that Job> shows what
+#                it did. helm --wait counts it as ready once it has started;
+#                --wait-for-jobs waits for it to complete.
+#   external     the hook Job <release>-schema-upgrade, as the admin role,
+#                after the setup Job and exactly when it runs
+#                (externalDatabase.setup.enabled); a failure fails the
+#                install or upgrade before the release's other objects
+#                change.
+schemaUpgrade:
+  # Compute resources of the schema upgrade Job's container. Default:
+  # requests of 50m CPU and 128Mi memory, no limits.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
 
 # The read service: GET /v0/publications, /livez and /readyz, as
 # app_readonly. It has no authentication and no TLS; anything that can reach

@@ -10,9 +10,16 @@
 # documents its own. example-issuer stands for an issuer you have set up.
 # Before the install, create the Secret pubdex-credentials as in
 # values-ingress-tls.yaml, but not pubdex-tls: the certificate manager
-# creates and renews that one. Then, from the repository's root:
+# creates and renews that one. Then, from the root of the PubDex source of
+# this chart's version:
 #
-#   helm install pubdex charts/pubdex --values charts/pubdex/examples/values-ingress-cert-manager.yaml
+# Prepare values-images.yaml with image.digest and postgresImage.digest
+# from the selected PubDex release record. A tag can be moved; the digests
+# identify the exact images. See KUBERNETES.md, The short path.
+# These substitutions are not run by the suite; stage 8 renders this example,
+# and stage 9 admits its objects with the run's own image references.
+#   helm install pubdex charts/pubdex --values charts/pubdex/examples/values-ingress-cert-manager.yaml \
+#     --values values-images.yaml
 secrets:
   name: pubdex-credentials
 ingress:

@@ -3,8 +3,14 @@
 # verifies lives in run_ci_suite.sh and the tracked scripts it calls: the job
 # checks the repository out with its history, creates .venv with
 # ./setup_venv.sh, installs the pinned helm, kubectl and kind under .tools/
-# with ./setup_cluster_tools.sh, and runs the nine stages of ./run_ci_suite.sh
-# with the event's commit range.
+# with ./setup_cluster_tools.sh, pulls the pinned SBOM tool, Syft's image by
+# digest, with ./release.sh setup, and runs the eleven stages of
+# ./run_ci_suite.sh with the event's commit range.
+#
+# The job publishes nothing. A test release never leaves the runner's
+# machine, and no step logs in to a registry, pushes an image, a chart, an
+# archive or a tag, or runs the publish step of release.sh, which is the
+# maintainer's alone (RELEASING.md). The job reads no repository secret.
 #
 # It needs a Forgejo Runner that has the label below as a host label
 # (pubdex-ci-host:host), so that the job runs directly on a machine meeting
@@ -18,20 +24,25 @@
 # (DB/lib/docker_versions.sh), a daemon on the same machine whose socket the
 # job's user may use, and access to the registries and the package index
 # unless Docker has the images and packages already. The tool setup needs
-# HTTPS access to the downloads DB/lib/cluster_tools.sh names, and sha256sum.
+# HTTPS access to the downloads DB/lib/cluster_tools.sh names, and sha256sum;
+# the SBOM tool's setup needs Docker Hub, without credentials.
 # Stage 9 creates two kind clusters on that daemon, one after the other, so
 # the daemon has to run kind's node as a privileged container and publish
 # each cluster's API server on 127.0.0.1, and stage 9 needs openssl, kind's
 # two node images by digest unless Docker has them, and from inside the
 # nodes, without credentials, the registry of the published images
-# (ghcr.io). A runner that runs jobs in containers does not meet it.
+# (ghcr.io). Stages 9 to 11 build test releases with release.sh, which needs
+# GNU tar, gzip, sha256sum and cmp, and stage 11 pulls the published images
+# from that registry through the daemon, unless Docker has them. A runner
+# that runs jobs in containers does not meet it.
 #
 # The checkout action is GitHub's actions/checkout at the commit the GitHub
 # workflow pins, fetched from Forgejo's mirror by absolute URL. No action
 # installs Python, because actions/setup-python downloads its interpreters
 # from GitHub; the runner provides python3.11, and the suite's log records
-# the versions each run used. pip and the packages, helm, kubectl, kind and
-# the images are pinned, fetched and installed as in the GitHub workflow.
+# the versions each run used. pip and the packages, helm, kubectl, kind, the
+# SBOM tool and the images are pinned, fetched and installed as in the GitHub
+# workflow.
 # Forgejo documents `permissions:` as ignored, so none is set; the automatic
 # token is not stored in the checkout.
 name: DB tests
@@ -43,24 +54,29 @@ on:
 jobs:
   checks:
     runs-on: pubdex-ci-host
-    # The same limit as the GitHub workflow, for the same estimate: the nine
-    # stages took about 13.5 minutes on a workstation and are estimated at
-    # about 24 on a hosted runner; the limit is 1.5 times that, rounded up to
-    # a multiple of 5. Forgejo Runner ends a job at its limit with SIGKILL,
-    # which skips the running stage's cleanup (DB/TESTING_STRATEGY.md,
-    # "Forgejo Actions").
-    timeout-minutes: 40
+    # The same limit as the GitHub workflow, for the same estimate: the
+    # eleven stages took about 23 minutes on a workstation and are estimated
+    # at 26 to 32 on a hosted runner, where no run of them has been measured;
+    # the limit is about twice that. Forgejo Runner ends a job at its limit
+    # with SIGKILL, which skips the running stage's cleanup
+    # (DB/TESTING_STRATEGY.md, "Forgejo Actions").
+    timeout-minutes: 60
     steps:
       - uses: https://data.forgejo.org/actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
           # Full history: the transform-version guard and the check of the
-          # pushed or proposed commits read the commit range.
+          # pushed or proposed commits read the commit range, the version
+          # guard reads the commit of the PubDex release VERSION names, once
+          # that release is published, and stage 9 takes the chart of the
+          # preceding PubDex release from its commit.
           fetch-depth: 0
           persist-credentials: false
       - name: Install dependencies
         run: ./setup_venv.sh --python python3.11
       - name: Install the pinned cluster tools
         run: ./setup_cluster_tools.sh
+      - name: Pull the pinned SBOM tool
+        run: ./release.sh setup
       - name: Run the complete verification suite
         # Forgejo runs a pull request's head commit, not a merge commit, so
         # its range starts at the merge base the event names. A push starts

@@ -5,17 +5,23 @@
 # Stages, in this order; the first stage that fails stops the run with that
 # stage's exit status:
 #   1. the default offline check suite (run_checks.sh): compilation, Markdown
-#      consistency, the offline unit and source-fixture tests and, given
-#      --base, the transform-version guard over that commit range;
+#      consistency, the release notes of VERSION in CHANGELOG.md against the
+#      tree and the preceding PubDex release in the release record, the
+#      version guard, which compares the shipped files with the commit of the
+#      PubDex release VERSION names once that release is published, the
+#      offline unit and source-fixture tests and, given --base, the
+#      transform-version guard over that commit range;
 #   2. committed secrets and local configuration
 #      (check_secrets_and_local_config.py) over the publishable tree and,
 #      given --base, the files each commit of that range adds or changes;
-#   3. schema bootstrap from an empty database and re-application of the
+#   3. the baseline from an empty database, the schema upgrade, a second
+#      schema upgrade with nothing left to do, and re-application of the
 #      runtime patch (DB/run_migration_smoke.sh);
-#   4. the task-1a clean-clone demonstration on the bundled fixtures
-#      (DB/run_task_1a_demo.sh);
-#   5. the complete integration suite on its own disposable PostgreSQL
-#      (DB/run_disposable_integration.sh);
+#   4. the task-1a clean-clone demonstration on the bundled fixtures, after
+#      the baseline and the schema upgrade (DB/run_task_1a_demo.sh);
+#   5. the complete integration suite on its own disposable PostgreSQL,
+#      after the baseline and the schema upgrade, with the schema upgrade's
+#      own tests among it (DB/run_disposable_integration.sh);
 #   6. the acceptance test of the Compose deployment (run_stack_acceptance.sh):
 #      the application image built from this checkout, compose.yaml started
 #      in a Compose project of its own, the synthetic demonstration ingested
@@ -43,7 +49,22 @@
 #      release has a routine upgrade and a rollback; then, on a second kind
 #      cluster of the oldest supported Kubernetes release, a user holding
 #      only the rights KUBERNETES.md lists runs evaluation mode's lifecycle,
-#      the kubelet pulling the published images.
+#      the kubelet pulling the published images;
+#  10. the rehearsal of a PubDex release (run_release_rehearsal.sh):
+#      release.sh builds test release A -- the checkout as it is, under a
+#      version reserved for test releases -- with its source archive, chart
+#      package, both images, their SBOMs and the provenance record, verifies
+#      it, builds it again and compares the two builds, the source archive
+#      and the chart package byte for byte, and lints and renders the chart
+#      from its package file; nothing is published;
+#  11. the upgrades between PubDex releases on the Compose deployment
+#      (run_upgrade_acceptance.sh): release.sh builds test release A of the
+#      checkout and test releases B1 and B2 with the test-only overlay, and an
+#      operator's commands upgrade A to B1 and roll back by swapping the
+#      images, upgrade A to B2, whose schema change A refuses, and roll back by
+#      restoring the backup taken before the upgrade, and upgrade the
+#      published preceding release -- and the upgrade floor, once it is
+#      another -- to A and roll back by swapping the images.
 #
 # Only synthetic fixtures and disposable databases are used. Stages 3-5 each
 # start their own uniquely named and labelled PostgreSQL container and volume,
@@ -55,41 +76,52 @@
 # the image tag each built and their secret files, with the read service on
 # a loopback port. Stage 6 puts PostgreSQL and ingestion on a network without
 # a route off the host; stage 7 keeps the ordinary network of compose.yaml
-# and runs only commands that contact no metadata provider. Only stages 6 and
-# 7 use Docker Compose: stage 6 with its project's explicit name, files and
-# settings, stage 7 with a synthetic .env file of its own in a directory of
-# its own. Stage 8 runs helm with a cleared environment in a temporary
+# and runs only commands that contact no metadata provider. Only stages 6, 7
+# and 11 use Docker Compose: stage 6 with its project's explicit name, files and
+# settings, stages 7 and 11 with a synthetic .env file of their own in a
+# directory of their own. Stage 8 runs helm with a cleared environment in a temporary
 # directory of its own, reads no kubeconfig and contacts no cluster. Stage 9
 # creates its kind cluster, network and image tags under names of the run's
 # own, runs every helm and kubectl call with a cleared environment against
 # the kubeconfig kind wrote into its temporary directory, after checking that
 # it names that cluster's loopback port alone, and deletes all of it again,
-# confirmed as in stages 6 and 7. No stage
+# confirmed as in stages 6 and 7. Stage 10 builds into a temporary directory
+# of its own, under a test release's version of its own, which labels its
+# images; every Docker command of it uses a Docker client configuration of
+# its own that holds no registry credential; it never runs the publish step
+# of release.sh, and removes its images, tags and directory again, confirmed
+# as in stages 6 and 7. Stage 11 does what stage 10 does with its three test
+# releases, and what stage 7 does with each of its Compose projects, which
+# also carry a run label of the run's own; it pulls the published images by
+# digest without credentials when Docker lacks them. No stage
 # connects to an existing database or a metadata provider, and in
 # the pytest runs of stages 1, 5 and 8 a network guard refuses any other network
 # access by the tests and the Python processes they start (a guard inside
 # Python, not network isolation; see DB/TESTING_STRATEGY.md for its
 # boundaries). No stage reads DB/.env: the tests of stages 1 and 8 run in a
 # cleared environment (DB/run_tests.sh, run_chart_checks.sh), and they and every Python step of
-# stages 4 and 5 run with PEOPLE_PUBS_SKIP_DOTENV=1; the image of stages 6
+# stages 3, 4 and 5 run with PEOPLE_PUBS_SKIP_DOTENV=1; the image of stages 6
 # and 7 reads no .env file at all. This script creates
 # nothing itself, so it has nothing of its own to clean up. An interrupt from
 # the terminal or an external timeout reaches the running stage directly,
 # which cleans up at once; a signal sent to this script alone takes effect when
 # the running stage returns, and no later stage starts.
 #
-# Needs Bash, a Git checkout, .venv with DB/requirements-dev.txt installed, for
-# stages 8 and 9 the pinned helm, kubectl and kind that ./setup_cluster_tools.sh
-# installs under .tools/, Linux on x86_64 for stage 9, and, for stages 3-7 and
-# 9, a Docker Engine 28.0.1 or later, except 28.2.0 to 28.3.2, with
-# the Compose plugin 2.24.0 or later (DB/lib/docker_versions.sh says why), which
+# Needs Bash, a Git checkout -- whose history, while VERSION names a published
+# PubDex release, holds that release's commit, for the version guard of stage
+# 1 -- .venv with DB/requirements-dev.txt installed, for stages 8-11 the pinned helm, kubectl and kind that ./setup_cluster_tools.sh
+# installs under .tools/, for stages 9-11 the pinned SBOM tool that
+# ./release.sh setup pulls, Linux on x86_64 for stages 9-11, and, for stages
+# 3-7 and 9-11, a Docker Engine 28.0.1 or later, except 28.2.0 to 28.3.2, with the buildx
+# plugin and the Compose plugin 2.24.0 or later (DB/lib/docker_versions.sh says why), which
 # this user can reach and which runs on the same machine: stages 3-5
-# bind-mount DB/init/ from this checkout, stages 6 and 7 files from the
+# bind-mount DB/init/ from this checkout, stages 6, 7 and 11 files from the
 # temporary directory, and they publish PostgreSQL and the read service on 127.0.0.1
-# (DB/TESTING_STRATEGY.md, "Running the suite elsewhere"). Stages 6, 7 and 9
-# need network access to build the image, and stage 9 kind's two node images,
+# (DB/TESTING_STRATEGY.md, "Running the suite elsewhere"). Stages 6, 7 and 9-11
+# need network access to build the images, and stage 9 kind's two node images,
 # unless Docker has them cached; stage 9 also needs openssl, and its clusters
-# pull the published images from their registry without credentials.
+# pull the published images from their registry without credentials, as
+# stage 11 does when Docker lacks them.
 # ./run_checks.sh remains the fast offline command for pre-commit and everyday
 # use.
 #
@@ -100,11 +132,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 PYTHON="$ROOT/.venv/bin/python"
-STAGES=9
+STAGES=11
 # shellcheck source=DB/lib/docker_versions.sh
 source "$ROOT/DB/lib/docker_versions.sh"
 # shellcheck source=DB/lib/cluster_tools.sh
 source "$ROOT/DB/lib/cluster_tools.sh"
+# shellcheck source=DB/lib/sbom_tool.sh
+source "$ROOT/DB/lib/sbom_tool.sh"
 
 usage() {
   cat <<'USAGE'
@@ -115,13 +149,15 @@ with that stage's exit status:
 
   1. offline check suite                          run_checks.sh
   2. committed secrets and local configuration    check_secrets_and_local_config.py
-  3. schema bootstrap from an empty database      DB/run_migration_smoke.sh
+  3. baseline and schema upgrade, empty database  DB/run_migration_smoke.sh
   4. task-1a clean-clone demonstration            DB/run_task_1a_demo.sh
   5. integration suite on disposable PostgreSQL   DB/run_disposable_integration.sh
   6. Compose deployment acceptance                run_stack_acceptance.sh
   7. operator workflow on the deployment          run_operator_acceptance.sh
   8. offline checks of the Helm chart             run_chart_checks.sh
   9. Helm chart on a disposable kind cluster      run_cluster_acceptance.sh
+ 10. rehearsal of a PubDex release, no publishing run_release_rehearsal.sh
+ 11. upgrades between PubDex releases, Compose    run_upgrade_acceptance.sh
 
   --base <sha> [--head <sha>]  also check this commit range (--head defaults
                                to HEAD): the transform-version guard in stage 1
@@ -134,9 +170,10 @@ with that stage's exit status:
   -h, --help                   show this help
 
 Needs a Git checkout, .venv with DB/requirements-dev.txt installed, the
-pinned helm, kubectl and kind (./setup_cluster_tools.sh), and a reachable
-Docker Engine 28.0.1 or later, except 28.2.0 to 28.3.2, with the Compose
-plugin 2.24.0 or later; stage 9 runs on Linux on x86_64 only.
+pinned helm, kubectl and kind (./setup_cluster_tools.sh), the pinned SBOM
+tool (./release.sh setup), and a reachable Docker Engine 28.0.1 or later,
+except 28.2.0 to 28.3.2, with the buildx plugin and the Compose plugin
+2.24.0 or later; stages 9-11 run on Linux on x86_64 only.
 ./run_checks.sh alone runs the offline part.
 USAGE
 }
@@ -230,7 +267,7 @@ for tool in kubectl kind; do
   fi
 done
 if ! command -v docker >/dev/null 2>&1; then
-  missing "docker was not found on PATH. Stages 3-7 and 9 start disposable containers." \
+  missing "docker was not found on PATH. Stages 3-7, 9 and 11 start disposable containers." \
     "Install Docker Engine, or run ./run_checks.sh for the offline part alone."
 fi
 if ! docker info >/dev/null 2>&1; then
@@ -240,22 +277,27 @@ fi
 engine_version="$(docker version --format '{{.Server.Version}}' 2>/dev/null)" || engine_version=""
 problem="$(engine_problem "$engine_version")"
 if [ -n "$problem" ]; then
-  missing "$problem: stages 6, 7 and 9 build the application image and start the deployment," \
+  missing "$problem: stages 6, 7 and 9-11 build the images, and stages 6, 7, 9 and 11 start the deployment," \
     "which need Docker Engine $ENGINE_SUPPORTED: other Engines start it too, but can let other hosts" \
     "reach the ports it publishes on 127.0.0.1 (DB/lib/docker_versions.sh says why)." \
     "Upgrade the engine, or run the stages before them on their own."
 fi
 compose_version="$(docker compose version --short 2>/dev/null)" || compose_version=""
 if [ -z "$compose_version" ]; then
-  missing "the Docker Compose plugin was not found ('docker compose version' fails); stages 6 and 7 need it." \
+  missing "the Docker Compose plugin was not found ('docker compose version' fails); stages 6, 7 and 11 need it." \
     "Install the Compose plugin, version $COMPOSE_MINIMUM or later (docker-compose-plugin of Docker's packages, docker-compose-v2 on Ubuntu, docker-compose on Debian 13, or Docker's" \
     "installation guide), so that 'docker compose' works for this user."
 fi
 problem="$(version_problem "Docker Compose" "$compose_version" "$COMPOSE_MINIMUM")"
 if [ -n "$problem" ]; then
-  missing "$problem; stages 6 and 7 need the Compose plugin $COMPOSE_MINIMUM or later," \
+  missing "$problem; stages 6, 7 and 11 need the Compose plugin $COMPOSE_MINIMUM or later," \
     "the first release that applies the health checks of compose.yaml as written." \
     "Upgrade the Compose plugin (docker-compose-plugin of Docker's packages, docker-compose-v2 on Ubuntu, docker-compose on Debian 13, or Docker's installation guide)."
+fi
+# Stages 9-11 build test releases, whose SBOMs release.sh writes with the pinned SBOM tool.
+if ! docker image inspect --format '{{.Id}}' "$PINNED_SYFT_IMAGE" >/dev/null 2>&1; then
+  missing "the pinned SBOM tool, Syft $PINNED_SYFT_VERSION, is not on this machine; stages 9-11 build test releases with it. Pull it, by its pinned digest, from the repository root with:" \
+    "./release.sh setup"
 fi
 
 # What this run uses that the repository does not pin, so that its log
@@ -273,7 +315,7 @@ echo "  compose $compose_version"
 
 # No stage takes database settings from the caller: stage 1 runs its tests in
 # a cleared environment (DB/run_tests.sh), stages 3-5 bind their own, and
-# stages 6 and 7 hand Compose only their run's own files and settings.
+# stages 6, 7 and 11 hand Compose only their run's own files and settings.
 
 # A signal that reaches this script alone takes effect once the running stage
 # has returned (and cleaned up); no later stage starts.
@@ -301,7 +343,7 @@ run_stage 1 "offline check suite (run_checks.sh)" \
   bash "$ROOT/run_checks.sh" ${range_args[@]+"${range_args[@]}"}
 run_stage 2 "committed secrets and local configuration (check_secrets_and_local_config.py)" \
   "$PYTHON" "$ROOT/check_secrets_and_local_config.py" ${range_args[@]+"${range_args[@]}"}
-run_stage 3 "schema bootstrap from an empty database (DB/run_migration_smoke.sh)" \
+run_stage 3 "baseline and schema upgrade from an empty database (DB/run_migration_smoke.sh)" \
   bash "$ROOT/DB/run_migration_smoke.sh"
 run_stage 4 "task-1a clean-clone demonstration (DB/run_task_1a_demo.sh)" \
   bash "$ROOT/DB/run_task_1a_demo.sh"
@@ -315,6 +357,10 @@ run_stage 8 "offline checks of the Helm chart (run_chart_checks.sh)" \
   bash "$ROOT/run_chart_checks.sh"
 run_stage 9 "Helm chart on a disposable kind cluster (run_cluster_acceptance.sh)" \
   bash "$ROOT/run_cluster_acceptance.sh"
+run_stage 10 "rehearsal of a PubDex release, nothing published (run_release_rehearsal.sh)" \
+  bash "$ROOT/run_release_rehearsal.sh"
+run_stage 11 "upgrades between PubDex releases on Compose (run_upgrade_acceptance.sh)" \
+  bash "$ROOT/run_upgrade_acceptance.sh"
 
 echo
 echo "PASS: all $STAGES stages of the complete verification suite passed in $((SECONDS - suite_started))s."
