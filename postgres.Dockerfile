@@ -11,7 +11,7 @@
 #
 # What it keeps of the official postgres:16 image, so that compose.yaml, its
 # health check, DB/init/ and the documented operations work unchanged: the
-# entrypoint scripts of postgres:16.15-trixie, copied from that image by
+# entrypoint scripts of postgres:16.16-trixie, copied from that image by
 # digest and checked by SHA-256 below -- POSTGRES_PASSWORD_FILE, POSTGRES_DB,
 # the scripts of /docker-entrypoint-initdb.d, a pg_hba.conf that
 # authenticates remote clients with scram-sha-256, initialisation on an empty
@@ -70,10 +70,10 @@
 
 ARG PYTHON_BASE=python:3.11.18-slim-trixie@sha256:82209229d3fda30d71e603ec95bb4bea0476635ba6df3df2e32284e036654f51
 ARG DEBIAN_BASE=debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4
-ARG POSTGRES_ENTRYPOINT_IMAGE=postgres:16.15-trixie@sha256:9e2cf6287f25c3151f4c9421ccce2b17f3e60061c111a29165e0d2cdd9ff0a97
+ARG POSTGRES_ENTRYPOINT_IMAGE=postgres:16.16-trixie@sha256:07abc3f43c9395b0bdbbab36bc25ddb0e8d83cd4fcafb5fb7d6abe14ff156dd8
 ARG PG_MAJOR=16
-ARG PG_VERSION=16.15
-ARG PG_SHA256=c1575341fa7bd40f5274ea465b34390f4dc64cdd0770af327005caaeb9f6b7ed
+ARG PG_VERSION=16.16
+ARG PG_SHA256=9d5cd8633043b75740d5d59749c6b7365e6aeb53c47098b1a5e80bb18f87881a
 ARG ENTRYPOINT_LICENSE_SHA256=87ffd2c45e3f90cfa3407b5c40ef8333e87c3e875e4895f8b64df758198deafc
 
 # The source archive, by hash, with Python's own HTTPS client, and the
@@ -220,7 +220,7 @@ ENV PG_MAJOR=${PG_MAJOR} \
 # library it needs, and that the build did not take XML support in.
 RUN cd /usr/local/bin \
  && printf '%s  %s\n' \
-      9c440299ae04a0a79d55b8bf03307036d890a40979d2fb698073c9050d4b20a5 docker-entrypoint.sh \
+      48647812e68165e2943abe82a1a7cb8364d6e9f8b6b6aefc179868b66a327c46 docker-entrypoint.sh \
       922ade6b23a312e65023349b36e873752b15ff38ae4c0ae461d74451e104f312 docker-ensure-initdb.sh \
     | sha256sum --check --strict \
  && ln -s docker-ensure-initdb.sh docker-enforce-initdb.sh \

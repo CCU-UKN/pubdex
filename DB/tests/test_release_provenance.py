@@ -79,9 +79,9 @@ LABEL org.opencontainers.image.base.name="docker.io/library/python:3.11.18-slim-
 PG_DOCKERFILE = f"""\
 ARG PYTHON_BASE=python:3.11.18-slim-trixie@{PY_DIGEST}
 ARG DEBIAN_BASE=debian:trixie-slim@{DEB_DIGEST}
-ARG POSTGRES_ENTRYPOINT_IMAGE=postgres:16.15-trixie@{ENTRY_DIGEST}
+ARG POSTGRES_ENTRYPOINT_IMAGE=postgres:16.16-trixie@{ENTRY_DIGEST}
 ARG PG_MAJOR=16
-ARG PG_VERSION=16.15
+ARG PG_VERSION=16.16
 ARG PG_SHA256={PG_SHA256}
 ARG ENTRYPOINT_LICENSE_SHA256={hashlib.sha256(LICENCE.encode()).hexdigest()}
 
@@ -126,7 +126,7 @@ def _labels(role: str, version: str, revision: str) -> Dict[str, str]:
                        "org.opencontainers.image.base.digest": PY_DIGEST, "pubdex.transform-version": TRANSFORM})
     else:
         labels.update({"org.opencontainers.image.base.name": "docker.io/library/debian:trixie-slim",
-                       "org.opencontainers.image.base.digest": DEB_DIGEST, "pubdex.postgresql-version": "16.15"})
+                       "org.opencontainers.image.base.digest": DEB_DIGEST, "pubdex.postgresql-version": "16.16"})
     return labels
 
 
@@ -147,7 +147,7 @@ def _sbom(role: str, version: str) -> dict:
             packages.append(_package(name, pinned, f"pkg:pypi/{name}@{pinned}", f"SPDXRef-Package-python-{name}"))
         packages.append(_package("wheel", "0.46.3", "pkg:pypi/wheel@0.46.3", "SPDXRef-Package-python-wheel"))
     else:
-        packages.append(_package("postgresql", "16.15", "pkg:generic/postgresql@16.15",
+        packages.append(_package("postgresql", "16.16", "pkg:generic/postgresql@16.16",
                                  "SPDXRef-Package-binary-postgresql"))
     return {
         "spdxVersion": "SPDX-2.3", "dataLicense": "CC0-1.0", "SPDXID": "SPDXRef-DOCUMENT", "name": repository,
@@ -205,7 +205,7 @@ class Fixture:
             "application.client.json": json.dumps({"psycopg": "3.3.6", "psycopg-c": "3.3.6", "psycopg-pool": "3.3.3",
                                                    "implementation": "c", "libpq": 170011, "libpq_build": 170011}),
             "application.libpq5.txt": LIBPQ5 + "\n",
-            "postgres.version.txt": "postgres (PostgreSQL) 16.15\n",
+            "postgres.version.txt": "postgres (PostgreSQL) 16.16\n",
             "builder.docker.txt": "29.10.0 linux/amd64\n",
             "builder.buildx.txt": "github.com/docker/buildx v0.39.0 360040a78d6113dc84e5d4dcdf0f438e1be7a41f\n",
             "builder.buildkit.txt": BUILDKIT,
@@ -279,10 +279,10 @@ def test_the_record_takes_every_field_from_the_checkout_the_directory_and_the_fa
     assert sorted(inputs["build_scripts"]) == ["DB/fetch_verified.py", "DB/install_locked.py",
                                                "DB/lib/release_identity.sh", "build_image.sh"]
     assert inputs["base_images"] == {"DEBIAN_BASE": f"debian:trixie-slim@{DEB_DIGEST}",
-                                     "POSTGRES_ENTRYPOINT_IMAGE": f"postgres:16.15-trixie@{ENTRY_DIGEST}",
+                                     "POSTGRES_ENTRYPOINT_IMAGE": f"postgres:16.16-trixie@{ENTRY_DIGEST}",
                                      "PYTHON_BASE": f"python:3.11.18-slim-trixie@{PY_DIGEST}"}
     assert inputs["postgresql_source"] == {
-        "version": "16.15", "url": "https://ftp.postgresql.org/pub/source/v16.15/postgresql-16.15.tar.bz2",
+        "version": "16.16", "url": "https://ftp.postgresql.org/pub/source/v16.16/postgresql-16.16.tar.bz2",
         "sha256": PG_SHA256}
     assert inputs["entrypoint_licence"] == {"path": "third_party/docker-library-postgres/LICENSE",
                                             "sha256": _sha(LICENCE)}
@@ -294,7 +294,7 @@ def test_the_record_takes_every_field_from_the_checkout_the_directory_and_the_fa
     assert app["client_libraries"] == {"psycopg": "3.3.6", "psycopg-c": "3.3.6", "psycopg-pool": "3.3.3",
                                        "implementation": "c", "libpq": "17.11", "libpq_build": "17.11",
                                        "libpq5": LIBPQ5}
-    assert (pg["id"], pg["postgresql"], pg["build_packages"]["make"]) == (PG_ID, "16.15", "4.4.1-2")
+    assert (pg["id"], pg["postgresql"], pg["build_packages"]["make"]) == (PG_ID, "16.16", "4.4.1-2")
     assert record["files"] == {
         name: hashlib.sha256((fixture.dir / name).read_bytes()).hexdigest()
         for name in ("IMAGES", f"pubdex-{TEST_VERSION}-image.spdx.json",

@@ -44,7 +44,7 @@ case "$1" in
     # docker image inspect --format <template> <reference>
     case "$4" in
       "{{.Id}}") echo "$STUB_IMAGE_ID" ;;
-      *postgresql-version*) echo "16.15" ;;
+      *postgresql-version*) echo "16.16" ;;
       *) echo "linux/amd64" ;;
     esac
     printf '%s\n' "${!#}" >> "$STUB_STATE/inspected"
@@ -184,7 +184,7 @@ def test_a_clean_checkout_builds_with_its_commit_as_revision(checkout: Checkout)
     assert "--iidfile" not in call
     assert (checkout.state / "inspected").read_text().split() == [
         "pubdex:local", "pubdex:local", "pubdex-postgres:local", "pubdex-postgres:local", "pubdex-postgres:local"]
-    assert "linux/amd64" in proc.stdout and "PostgreSQL         16.15" in proc.stdout
+    assert "linux/amd64" in proc.stdout and "PostgreSQL         16.16" in proc.stdout
     assert "not a release build" not in proc.stdout
 
 

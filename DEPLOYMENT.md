@@ -697,7 +697,7 @@ SQL/XML, and in this image every XML function fails with "unsupported XML
 feature" before any parser exists to call.
 
 It keeps what `compose.yaml`, its health check, the schema bootstrap and the
-operations on this page rely on, taken from `postgres:16.15-trixie` by
+operations on this page rely on, taken from `postgres:16.16-trixie` by
 digest: the entrypoint scripts, checked by SHA-256 — `POSTGRES_PASSWORD_FILE`,
 `POSTGRES_DB`, `/docker-entrypoint-initdb.d`, initialisation on an empty
 volume only, SCRAM for remote clients — the `postgres` user and group 999,

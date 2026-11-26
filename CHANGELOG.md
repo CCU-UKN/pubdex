@@ -43,6 +43,14 @@ Every schema change of 0.2.0 is backward compatible, so the rollback to
 run on the upgraded schema, which keeps schema change `0001`. A rollback is
 supported only to the PubDex release the upgrade started from.
 
+The PubDex PostgreSQL image moves from PostgreSQL 16.15 to 16.16, a minor
+release of the same major version. A minor release keeps the data
+directory's storage format, so the upgrade needs no dump and restore, and
+the image rollback starts 0.1.0's PostgreSQL 16.15 on the data directory
+16.16 used. PostgreSQL 16.16's release notes ask for a `REINDEX` of btree
+indexes on `bpchar` columns and of `gist_trgm_ops` indexes; PubDex's schema
+has neither.
+
 Existing chart values, Compose settings and secret files remain usable. The new
 `schemaUpgrade.resources` chart value configures the schema Job. A routine
 external-mode upgrade changes neither passwords nor schema, turns the
@@ -112,16 +120,18 @@ under a 60-minute limit, without a publication step.
 
 ### Local verification
 
-On 2026-11-24 all eleven stages passed locally in **1,467 seconds**:
-2,376 offline tests with 138 expected skips, 135 integration tests and two
-28-test reruns, 471 chart tests, Kubernetes 1.37.0 and 1.35.8, a release
-rehearsal and Compose upgrades. Test release A→B1 and image rollback passed
-on Compose and Kubernetes external mode; A→B2, refusal and rollback by
-restore passed on Compose, including restoration of the original data
-values. Published 0.1.0→checkout upgrades and image rollbacks passed on
-Compose and in all three Kubernetes deployment phases. Every cleanup was
-confirmed. The four record documents were written afterwards and passed
-stage 1 and the document checks. [`TASK_2C.md`](TASK_2C.md) gives the
+On 2026-11-26 all eleven stages passed locally in **1,739 seconds**, with
+the PostgreSQL image built from PostgreSQL 16.16: 2,376 offline tests with
+138 expected skips, 135 integration tests and two 28-test reruns, 471
+chart tests, Kubernetes 1.37.0 and 1.35.8, a release rehearsal and Compose
+upgrades. Test release A→B1 and image rollback passed on Compose and
+Kubernetes external mode; A→B2, refusal and rollback by restore passed on
+Compose, including restoration of the original data values. Published
+0.1.0→checkout upgrades and image rollbacks passed on Compose and in all
+three Kubernetes deployment phases; on Compose the rollback started 0.1.0's
+PostgreSQL 16.15 on the data directory 16.16 had used. Every cleanup was
+confirmed. The record sections of this file and of `TASK_2C.md` were
+written afterwards and passed stage 1 and the document checks. [`TASK_2C.md`](TASK_2C.md) gives the
 acceptance matrix, tools, durations and verification limits.
 
 The final candidate's clean-clone run, public CI and the published 0.2.0

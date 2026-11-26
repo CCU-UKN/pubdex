@@ -864,7 +864,7 @@ def test_the_provenance_record_is_written_from_the_build_and_covered_by_the_chec
     assert record["release"]["revision"] == COMMIT + "-dirty" and record["release"]["tree_changes"] is True
     assert record["release"]["source_date_epoch"] == int(EPOCH)
     assert record["images"]["application"]["id"] == checkout.image_id(f"pubdex-release:{TEST_VERSION}")
-    assert record["images"]["postgres"]["postgresql"] == "16.15"
+    assert record["images"]["postgres"]["postgresql"] == "16.16"
     assert record["build"]["sbom_tool"] == {"name": "syft", "version": "1.57.2", "image": SYFT_IMAGE,
                                             "image_id": SYFT_ID}
     assert sorted(record["files"]) == sorted([f"pubdex-{TEST_VERSION}-source.tar.gz", f"pubdex-{TEST_VERSION}.tgz",

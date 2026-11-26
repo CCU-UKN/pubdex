@@ -165,7 +165,7 @@ case "$1" in
     has wrong-digest && digests="${last%%:*}@sha256:$(printf 'f%.0s' $(seq 64))"
     id=sha256:pulled
     case "$last" in *pubdex-postgres*) id=sha256:pulled-postgres ;; esac
-    printf 'id=%s\nversion=%s\nrevision=%s\ndigests=%s\npostgresql=16.15\n' "$id" \
+    printf 'id=%s\nversion=%s\nrevision=%s\ndigests=%s\npostgresql=16.16\n' "$id" \
       "$(cat "$state/pull_version" 2>/dev/null || echo 0.1.0)" \
       "$(cat "$state/pull_revision" 2>/dev/null || echo unknown)" \
       "$digests" > "$state/images/$(key "$last")"
@@ -283,7 +283,7 @@ mkdir -p "$state/images"
 printf 'id=sha256:built\nversion=%s\nrevision=%s\ndigests=\n' "$(cat "$state/build_version" 2>/dev/null || echo 0.1.0)" \
   "$(cat "$state/build_revision" 2>/dev/null || echo "@SHA@")" > "$state/images/$(key "$2")"
 cp "$state/images/$(key "$2")" "$state/images/$(key sha256:built)"
-printf 'id=sha256:built-postgres\nversion=%s\nrevision=%s\ndigests=\npostgresql=16.15\n' \
+printf 'id=sha256:built-postgres\nversion=%s\nrevision=%s\ndigests=\npostgresql=16.16\n' \
   "$(cat "$state/build_version" 2>/dev/null || echo 0.1.0)" \
   "$(cat "$state/build_postgres_revision" 2>/dev/null || cat "$state/build_revision" 2>/dev/null || echo "@SHA@")" \
   > "$state/images/$(key "$4")"
@@ -396,7 +396,7 @@ class Fake:
     def add_postgres_image(self, reference: str = DEFAULT_POSTGRES, revision: str = SHA, digests: str = "",
                            version: str = "0.1.0") -> None:
         """A PubDex PostgreSQL image, by default the one compose.yaml names."""
-        self.add_image(reference, revision, digests, version, image_id="sha256:postgres-given", postgresql="16.15")
+        self.add_image(reference, revision, digests, version, image_id="sha256:postgres-given", postgresql="16.16")
 
     def image_root(self, lock: dict, installed: dict, files: tuple = ()) -> Path:
         """The file system the package check then runs in, instead of the

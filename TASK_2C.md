@@ -1,6 +1,6 @@
 # Task 2c — release automation, schema upgrade and upgrade tests
 
-**PubDex 0.2.0 candidate, verified locally on 2026-11-24. The final
+**PubDex 0.2.0 candidate, verified locally on 2026-11-26. The final
 candidate's clean-clone run, public CI and publication remain pending.**
 
 This tree implements the release automation and the documented upgrade
@@ -173,27 +173,30 @@ the older images, using the external server's own means in external mode.
 
 ## Local verification record
 
-**On 2026-11-24 the full suite passed on this tree, apart from
-`TASK_2C.md`, `CHANGELOG.md`, `README.md` and `DB/TESTING_STRATEGY.md`,
-which passed stage 1 afterwards.** The Kubernetes-window reading dates
-were refreshed before the full run; the supported window remained
-1.35–1.37. The suite also checked the implementation's transform-version
-and secrets commit range.
+**On 2026-11-26 the full suite passed on this tree, apart from the record
+sections of `TASK_2C.md` and `CHANGELOG.md`, which were written afterwards
+and passed stage 1.** The tree builds the PubDex PostgreSQL image from
+PostgreSQL 16.16. The supported Kubernetes window remained 1.35–1.37. The
+run checked the working tree without a commit range; the range checks run
+on the single commit in CI.
 
 | Stage | Seconds | Result |
 |---|---|---|
-| 1, offline checks | 536 | 2,376 passed, 138 expected skips; release notes, version guard and transform-version range check passed |
-| 2, secrets and local configuration | 8 | publishable tree and commit range passed |
+| 1, offline checks | 585 | 2,376 passed, 138 expected skips; release notes and version guard passed |
+| 2, secrets and local configuration | 6 | publishable tree passed (322 files) |
 | 3, baseline and schema upgrade | 7 | passed |
-| 4, fixture demonstration | 4 | passed without metadata-provider requests |
-| 5, disposable integration | 36 | 135 passed, then 28 after the runtime patch and 28 after the development restore |
-| 6, Compose acceptance | 49 | passed, cleanup confirmed |
-| 7, operator workflow | 55 | passed, including restore; cleanup confirmed |
-| 8, chart checks | 28 | 471 passed |
-| 9, Kubernetes acceptance | 577 | all 35 steps passed on 1.37.0 and 1.35.8; cleanup confirmed |
-| 10, release rehearsal | 32 | both builds verified and compared; cleanup confirmed |
-| 11, Compose upgrades | 135 | compatible rollback, incompatible refusal and restore, published 0.1.0 path passed; cleanup confirmed |
-| **Complete suite** | **1,467** | **all eleven stages passed** |
+| 4, fixture demonstration | 5 | passed without metadata-provider requests |
+| 5, disposable integration | 42 | 135 passed, then 28 after the runtime patch and 28 after the development restore |
+| 6, Compose acceptance | 188 | passed on a newly built PostgreSQL 16.16 image, cleanup confirmed |
+| 7, operator workflow | 65 | passed, including restore; cleanup confirmed |
+| 8, chart checks | 45 | 471 passed |
+| 9, Kubernetes acceptance | 630 | all 35 steps passed on 1.37.0 and 1.35.8; cleanup confirmed |
+| 10, release rehearsal | 31 | both builds verified and compared; cleanup confirmed |
+| 11, Compose upgrades | 135 | compatible rollback, incompatible refusal and restore, published 0.1.0 path (PostgreSQL 16.15) to the checkout (16.16) and its image rollback passed; cleanup confirmed |
+| **Complete suite** | **1,739** | **all eleven stages passed** |
+
+Stage 1 shared the host with other work during this run, so its duration
+is no baseline.
 
 The host was Linux 6.8 on x86_64, Bash 5.2.21, Git 2.43.0, CPython
 3.11.17, pip 26.2.2, psycopg 3.3.6 in its Python implementation with
