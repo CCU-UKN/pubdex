@@ -466,7 +466,11 @@ credential-like names count only for a value shaped like a credential — eight
 or more characters mixing letters and digits — because such names also hold
 identifiers (`source_token: crossref`); password- and secret-like names count
 for any literal, so an API key written without a digit passes where the same
-text as a password would be reported. A value that is syntactically a
+text as a password would be reported. In a provenance record of the release
+record, `releases/<version>/pubdex-<version>-provenance.json`, a package
+inventory entry whose value is shaped like a version, such as Debian's
+`passwd` package, is a package and not a setting; the rest of that file is
+read as any JSON. A value that is syntactically a
 template field (`{name}`) is accepted everywhere, a `${{ expression }}` is
 accepted as a whole, whatever literal it contains, and in shell code a
 double-quoted composition with a short lower-case affix (`"pa$word"`, which

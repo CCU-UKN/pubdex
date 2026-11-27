@@ -9,7 +9,7 @@ repository, and prototype functionality included here is not claimed as funded
 work; the entries below describe the funded results built on top of it.
 Background: [Origins and funding](README.md).
 
-## PubDex 0.2.0 — unpublished candidate
+## PubDex 0.2.0 — published 2026-11-27
 
 ### Schema changes
 
@@ -134,9 +134,13 @@ confirmed. The record sections of this file and of `TASK_2C.md` were
 written afterwards and passed stage 1 and the document checks. [`TASK_2C.md`](TASK_2C.md) gives the
 acceptance matrix, tools, durations and verification limits.
 
-The final candidate's clean-clone run, public CI and the published 0.2.0
-artifact set remain pending, to be recorded after publication. External
-acceptance of task 2c is not asserted.
+PubDex 0.2.0 was published on 2026-11-27 from commit
+`1ce756048dbd7b51ecdd526967df270bb5d4e26a`, tag `v0.2.0`. That commit's
+clean-clone run, its two public CI runs, the published images and release
+page files, and their checks without credentials are recorded in
+[`TASK_2C.md`](TASK_2C.md), *Public CI and the published PubDex release*;
+the release record is [`releases/0.2.0/`](releases/0.2.0/release.json).
+External acceptance of task 2c is not asserted.
 
 ## Helm chart, chart version 0.1.0 — public CI passed 2026-11-17
 

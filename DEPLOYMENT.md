@@ -28,7 +28,7 @@ docker version --format '{{.Server.Version}}'    # 28.0.1 or later, except 28.2.
 docker compose version --short                   # 2.24.0 or later
 ```
 
-Version 0.1.0 is published for `linux/amd64`. To use it without a clone,
+Version 0.2.0 is published for `linux/amd64`. To use it without a clone,
 follow [Selecting a published image](#selecting-a-published-image), which
 names both verified image digests. To build the two images yourself,
 prepare a clone once:
@@ -819,13 +819,17 @@ and apt remain.
 
 ### Selecting a published image
 
-Version 0.1.0 is public at `ghcr.io/ccu-ukn/pubdex` and
+Version 0.2.0 is public at `ghcr.io/ccu-ukn/pubdex` and
 `ghcr.io/ccu-ukn/pubdex-postgres`, next to the [canonical
 repository](https://github.com/CCU-UKN/pubdex). Both images are
 `linux/amd64`, built from source commit
-`57a72dc9f27766007b51c3d16ac7aa8c6ff3798b`; their publication and
-anonymous verification are recorded in [`TASK_2A.md`](TASK_2A.md),
-*Published-image evidence*. The application image carries the deployment
+`1ce756048dbd7b51ecdd526967df270bb5d4e26a`; their publication and
+anonymous verification are recorded in [`TASK_2C.md`](TASK_2C.md),
+*Public CI and the published PubDex release*. Version 0.1.0, built from
+`57a72dc9f27766007b51c3d16ac7aa8c6ff3798b`, stays public; the [release
+record](releases/README.md) names both by digest, and
+[`TASK_2A.md`](TASK_2A.md), *Published-image evidence*, records 0.1.0's
+publication. The application image carries the deployment
 files, so no clone is needed. With the Engine and Compose versions checked
 as in [The short path](#the-short-path), in an empty directory, whose name becomes the
 project's:
@@ -833,7 +837,7 @@ project's:
 ```bash
 mkdir pubdex
 cd pubdex
-docker run --rm ghcr.io/ccu-ukn/pubdex:0.1.0 tar -cC /opt/pubdex compose.yaml create_secrets.sh set_passwords.sh | tar -x
+docker run --rm ghcr.io/ccu-ukn/pubdex:0.2.0 tar -cC /opt/pubdex compose.yaml create_secrets.sh set_passwords.sh | tar -x
 bash create_secrets.sh
 docker compose up --wait
 ```
@@ -845,18 +849,18 @@ its schema and Compose file, give the digests in the first command and in
 would otherwise pull the movable tags again.
 
 ```bash
-docker run --rm ghcr.io/ccu-ukn/pubdex:0.1.0@sha256:24d570015b20f222c767a8bb89dd18d792abbd25cc730137f7b8bc285df6a325 tar -cC /opt/pubdex compose.yaml create_secrets.sh set_passwords.sh | tar -x
-echo 'PEOPLE_PUBS_IMAGE=ghcr.io/ccu-ukn/pubdex:0.1.0@sha256:24d570015b20f222c767a8bb89dd18d792abbd25cc730137f7b8bc285df6a325' > .env
-echo 'PEOPLE_PUBS_POSTGRES_IMAGE=ghcr.io/ccu-ukn/pubdex-postgres:0.1.0@sha256:33988fb179e2065e653ad7813cecf812c21f4381537b8b8db546ad37236b780a' >> .env
+docker run --rm ghcr.io/ccu-ukn/pubdex:0.2.0@sha256:868371ce79d94bb77ccd3fe570485b102d270c41f9d4cb311b028a9155de3c61 tar -cC /opt/pubdex compose.yaml create_secrets.sh set_passwords.sh | tar -x
+echo 'PEOPLE_PUBS_IMAGE=ghcr.io/ccu-ukn/pubdex:0.2.0@sha256:868371ce79d94bb77ccd3fe570485b102d270c41f9d4cb311b028a9155de3c61' > .env
+echo 'PEOPLE_PUBS_POSTGRES_IMAGE=ghcr.io/ccu-ukn/pubdex-postgres:0.2.0@sha256:ba88f35fbc031610cf1fc3f0f4f712568a1085360a3ef3a6b585336e3d4eab40' >> .env
 ```
 
 To check a release before relying on it, run in a clone, at any time:
 
 ```bash
 ./run_stack_acceptance.sh --release --pull \
-  --image ghcr.io/ccu-ukn/pubdex:0.1.0@sha256:24d570015b20f222c767a8bb89dd18d792abbd25cc730137f7b8bc285df6a325 \
-  --postgres-image ghcr.io/ccu-ukn/pubdex-postgres:0.1.0@sha256:33988fb179e2065e653ad7813cecf812c21f4381537b8b8db546ad37236b780a \
-  --expect-version 0.1.0 --expect-revision 57a72dc9f27766007b51c3d16ac7aa8c6ff3798b
+  --image ghcr.io/ccu-ukn/pubdex:0.2.0@sha256:868371ce79d94bb77ccd3fe570485b102d270c41f9d4cb311b028a9155de3c61 \
+  --postgres-image ghcr.io/ccu-ukn/pubdex-postgres:0.2.0@sha256:ba88f35fbc031610cf1fc3f0f4f712568a1085360a3ef3a6b585336e3d4eab40 \
+  --expect-version 0.2.0 --expect-revision 1ce756048dbd7b51ecdd526967df270bb5d4e26a
 ```
 
 ## What identifies a deployment

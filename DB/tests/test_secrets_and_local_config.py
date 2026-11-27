@@ -203,6 +203,57 @@ def test_secret_assignments(tmp_path: Path, name: str, content: str, line: int) 
     assert findings(tmp_path, name, content) == [(line, "secret-assignment")]
 
 
+# A provenance record lists Debian's passwd and base-passwd packages with their
+# versions, as every image built on Debian has them.
+PASSWD = j("pass", "wd")
+PACKAGES = {j("base-", PASSWD): "3.6.7", PASSWD: "1:4.17.4-2", "zlib1g": "1:1.3.dfsg+really1.3.1-1+b1"}
+RECORD = "releases/9.9.9/pubdex-9.9.9-provenance.json"
+
+
+def provenance_record(packages: dict, **more) -> str:
+    images = {role: {"tag": f"{role}:9.9.9", "build_packages": packages} for role in ("application", "postgres")}
+    return json.dumps({"format": "pubdex-provenance/2", "images": images, **more}, indent=2) + "\n"
+
+
+def test_package_versions_in_a_release_records_provenance_are_not_settings(tmp_path: Path) -> None:
+    assert findings(tmp_path, RECORD, provenance_record(PACKAGES)) == []
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "releases/9.9.9/pubdex-9.9.8-provenance.json",   # another version's name
+        "dist/pubdex-9.9.9/pubdex-9.9.9-provenance.json",  # a build directory, not the record
+        "releases/9.9.9/provenance.json",
+        "pubdex-9.9.9-provenance.json",
+    ],
+)
+def test_the_same_inventory_elsewhere_is_checked_as_any_json(tmp_path: Path, name: str) -> None:
+    found = findings(tmp_path, name, provenance_record(PACKAGES))
+    assert len(found) == 4 and {rule for _line, rule in found} == {"secret-assignment"}
+
+
+def test_the_rest_of_a_provenance_record_is_checked(tmp_path: Path) -> None:
+    # A value that is no version under a package name, and a secret-named
+    # setting outside the inventories.
+    text = provenance_record({PASSWD: SECRET}, settings={j("pass", "word"): SECRET})
+    found = findings(tmp_path, RECORD, text)
+    assert len(found) == 3 and {rule for _line, rule in found} == {"secret-assignment"}
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        provenance_record(PACKAGES)[:-3],                                       # not JSON
+        provenance_record(PACKAGES).replace("pubdex-provenance/2", "other/1"),  # not a provenance record
+    ],
+    ids=["unparsable", "other-format"],
+)
+def test_a_file_that_is_no_provenance_record_is_checked_as_any_json(tmp_path: Path, text: str) -> None:
+    found = findings(tmp_path, RECORD, text)
+    assert len(found) == 4 and {rule for _line, rule in found} == {"secret-assignment"}
+
+
 DOLLAR = "$"
 # Literal values that merely contain "$" or start with a bracket.
 LOOKALIKES = [

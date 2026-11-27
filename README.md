@@ -93,7 +93,7 @@ NLnet project number: 2026-02-585.
 | [`TASK_1B.md`](TASK_1B.md) | The acceptance record for the second funded result, the forge-portable test suite |
 | [`TASK_2A.md`](TASK_2A.md) | The acceptance record for the container image and the Compose deployment |
 | [`TASK_2B.md`](TASK_2B.md) | The acceptance record for the Helm chart and its tests on a disposable cluster |
-| [`TASK_2C.md`](TASK_2C.md) | The acceptance record for release automation, the schema upgrade and upgrade and rollback tests; public CI and publication pending |
+| [`TASK_2C.md`](TASK_2C.md) | The acceptance record for release automation, the schema upgrade and upgrade and rollback tests; PubDex 0.2.0, published 2026-11-27 |
 | [`DEVELOPMENT_METHODS.md`](DEVELOPMENT_METHODS.md) | How the initial public baseline was prepared, reviewed and verified |
 | [`QUICKSTART.md`](QUICKSTART.md) | Clean clone to a running database with demo data, a query over what landed, and an export |
 | [`QUICKSTART_CURATION.md`](QUICKSTART_CURATION.md) | Curation, aliases and reporting exports on top of that state |
@@ -114,7 +114,7 @@ NLnet project number: 2026-02-585.
 ### Running PubDex as a service
 
 On Linux x86_64, with Docker Engine 28.0.1 or later, except 28.2.0 to
-28.3.2, the Compose plugin 2.24.0 or later and Bash. Version 0.1.0 is public;
+28.3.2, the Compose plugin 2.24.0 or later and Bash. Version 0.2.0 is public;
 [Selecting a published image](DEPLOYMENT.md#selecting-a-published-image)
 shows how to run it without a clone, using both verified image digests.
 Building the images from this checkout also needs Git and Docker's buildx

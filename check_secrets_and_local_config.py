@@ -89,7 +89,13 @@ Which rule applies where:
 Token-, API-key- and credential-like names are reported only for a value
 shaped like a credential (eight or more characters mixing letters and
 digits), because such names also hold identifiers (`source_token: crossref`);
-password- and secret-like names are reported for any literal. This is a
+password- and secret-like names are reported for any literal. A PubDex
+release's provenance record in the release record,
+`releases/<version>/pubdex-<version>-provenance.json`, lists each image's
+packages in `images.<role>.build_packages`, name to version, Debian's
+`passwd` and `base-passwd` among them: an entry there whose value is shaped
+like a version is a package, not a setting. The rest of that file, and any
+other file, is checked as usual. This is a
 pattern check with known limits, not proof that no secret is present: a
 literal under an unremarkable name, a literal passed positionally, an unusual
 token format, a secret in a binary file, and history older than the checked
@@ -100,6 +106,7 @@ from __future__ import annotations
 import argparse
 import ast
 import io
+import json
 import os
 import re
 import subprocess
@@ -805,10 +812,39 @@ def _keyword_password_findings(line: str) -> bool:
     return False
 
 
+_PROVENANCE_RECORD_RE = re.compile(r"releases/(?P<version>[^/]+)/pubdex-(?P=version)-provenance\.json")
+_PACKAGE_VERSION_RE = re.compile(r"[0-9][0-9A-Za-z.+~:_-]*")
+
+
+def _package_inventory(path: str, text: str) -> Set[Tuple[str, str]]:
+    """(name, version) of every package a release record's provenance record lists.
+
+    Empty for any other path, and for a file that is not such a record, so
+    that it is checked as any JSON file.
+    """
+    if not _PROVENANCE_RECORD_RE.fullmatch(path):
+        return set()
+    try:
+        record = json.loads(text)
+    except ValueError:
+        return set()
+    if not isinstance(record, dict) or not str(record.get("format", "")).startswith("pubdex-provenance/"):
+        return set()
+    images = record.get("images")
+    pairs: Set[Tuple[str, str]] = set()
+    for image in images.values() if isinstance(images, dict) else ():
+        packages = image.get("build_packages") if isinstance(image, dict) else None
+        for name, version in packages.items() if isinstance(packages, dict) else ():
+            if isinstance(version, str) and _PACKAGE_VERSION_RE.fullmatch(version):
+                pairs.add((name, version))
+    return pairs
+
+
 def content_findings(path: str, text: str) -> Set[Tuple[int, str]]:
     """(line, rule) pairs for one text file."""
     found: Set[Tuple[int, str]] = set()
     styles = _assignment_styles(path)
+    packages = _package_inventory(path, text) if "json" in styles else set()
     lines = text.splitlines()
     for number, line in enumerate(lines, 1):
         if _PRIVATE_KEY_RE.search(line) and _private_key_is_real(lines, number - 1):
@@ -847,6 +883,8 @@ def content_findings(path: str, text: str) -> Set[Tuple[int, str]]:
                 found.add((number, "secret-assignment"))
         if "json" in styles:
             for m in _JSON_ASSIGNMENT_RE.finditer(line):
+                if (m.group("key"), m.group("value")) in packages:
+                    continue
                 if _secret_literal(m.group("key"), m.group("value")):
                     found.add((number, "secret-assignment"))
     if "python" in styles:

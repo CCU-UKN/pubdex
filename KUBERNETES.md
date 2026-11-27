@@ -403,7 +403,7 @@ a machine with Docker that reaches the server:
 ```sh
 docker volume create pubdex-initdb
 docker run --rm --network none -v pubdex-initdb:/var/lib/pubdex/initdb \
-  ghcr.io/ccu-ukn/pubdex:0.1.0@sha256:24d570015b20f222c767a8bb89dd18d792abbd25cc730137f7b8bc285df6a325 \
+  ghcr.io/ccu-ukn/pubdex:0.2.0@sha256:868371ce79d94bb77ccd3fe570485b102d270c41f9d4cb311b028a9155de3c61 \
   python -m people_pubs.bootstrap /var/lib/pubdex/initdb
 docker run --rm --user "$(id -u):$(id -g)" --read-only --tmpfs /tmp \
   --cap-drop ALL --security-opt no-new-privileges \
@@ -418,7 +418,7 @@ docker run --rm --user "$(id -u):$(id -g)" --read-only --tmpfs /tmp \
   -e PEOPLE_PUBS_APP_READONLY_PASSWORD_FILE=/run/secrets/pubdex/app_readonly_password \
   -e PEOPLE_PUBS_APP_WRITER_PASSWORD_FILE=/run/secrets/pubdex/app_writer_password \
   -e PEOPLE_PUBS_SETUP_INIT_DIR=/var/lib/pubdex/initdb \
-  ghcr.io/ccu-ukn/pubdex-postgres:0.1.0@sha256:33988fb179e2065e653ad7813cecf812c21f4381537b8b8db546ad37236b780a \
+  ghcr.io/ccu-ukn/pubdex-postgres:0.2.0@sha256:ba88f35fbc031610cf1fc3f0f4f712568a1085360a3ef3a6b585336e3d4eab40 \
   bash /opt/pubdex/setup/external-setup.sh
 docker volume rm pubdex-initdb
 ```
@@ -709,7 +709,7 @@ password file; the command stays on kubectl's command line:
 
 ```sh
 kubectl --namespace pubdex run pubdex-run -i --rm --restart=Never --quiet \
-  --image=ghcr.io/ccu-ukn/pubdex:0.1.0@sha256:24d570015b20f222c767a8bb89dd18d792abbd25cc730137f7b8bc285df6a325 \
+  --image=ghcr.io/ccu-ukn/pubdex:0.2.0@sha256:868371ce79d94bb77ccd3fe570485b102d270c41f9d4cb311b028a9155de3c61 \
   --override-type=json \
   --overrides="$(kubectl --namespace pubdex get configmap pubdex-run --output 'jsonpath={.data.overrides}')" \
   -- python -m people_pubs.sync.export_publications > publications.csv
@@ -728,7 +728,7 @@ specification. Give it on standard input to the attached pod instead:
 
 ```sh
 kubectl --namespace pubdex run pubdex-run -i --rm --restart=Never --quiet \
-  --image=ghcr.io/ccu-ukn/pubdex:0.1.0@sha256:24d570015b20f222c767a8bb89dd18d792abbd25cc730137f7b8bc285df6a325 \
+  --image=ghcr.io/ccu-ukn/pubdex:0.2.0@sha256:868371ce79d94bb77ccd3fe570485b102d270c41f9d4cb311b028a9155de3c61 \
   --override-type=json \
   --overrides="$(kubectl --namespace pubdex get configmap pubdex-run --output 'jsonpath={.data.overrides}')" \
   -- python -m people_pubs.sync.add_people --csv - < roster.csv
